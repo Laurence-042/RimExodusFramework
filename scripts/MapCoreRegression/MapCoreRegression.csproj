@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../build/RimWorldReferences.props" />
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType><ImplicitUsings>enable</ImplicitUsings>
+    <RimExodusSourceDir Condition="'$(RimExodusSourceDir)' == ''">../../../RimExodus/Source</RimExodusSourceDir>
+  </PropertyGroup>
+  <ItemGroup><ProjectReference Include="../../Source/RimExodus.Maps.csproj" /></ItemGroup>
+  <PropertyGroup Condition="Exists('$(RimExodusSourceDir)/Rendering/SeamlessWaylithMapRenderCompat.cs')">
+    <DefineConstants>$(DefineConstants);RIMEXODUS_COMPOSITION</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(RimExodusSourceDir)/Rendering/SeamlessWaylithMapRenderCompat.cs')">
+    <Compile Include="$(RimExodusSourceDir)/Rendering/SeamlessWaylithMapRenderCompat.cs" Link="References/SeamlessWaylithMapRenderCompat.cs" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ModMetaData>
+  <name>RimExodus Framework</name>
+  <packageId>RimExodus.Framework</packageId>
+  <author>Laurence-042</author>
+  <modVersion>1.0.0</modVersion>
+  <supportedVersions><li>1.6</li><li>1.7</li></supportedVersions>
+  <description>RimExodus 系列通用地图渲染框架与地图内结构操作工具包。提供多地图绘制与坐标映射、无 worldtile 口袋图、区域 prefab 序列化与重建、整图归档和地图 tick 速率控制。框架本身不添加玩法内容。
+
+Shared map rendering and in-map structure toolkit for the RimExodus series. Includes map draw capture, transforms, pocket maps, region prefabs, whole-map archives and tick-rate controls. Gameplay policies belong to consumer mods.</description>
+  <modDependencies>
+    <li><packageId>brrainz.harmony</packageId><displayName>Harmony</displayName><steamWorkshopUrl>steam://url/CommunityFilePage/2009463077</steamWorkshopUrl></li>
+  </modDependencies>
+  <loadAfter><li>brrainz.harmony</li></loadAfter>
+  <loadBefore><li>RimExodus.DeltaV.dev</li></loadBefore>
+</ModMetaData>
