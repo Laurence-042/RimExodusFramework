@@ -34,6 +34,7 @@ DrawCaptureChecks.Run();
 NativeRenderChecks.Run();
 RenderViewCompatChecks.Run();
 SpatialChecks.Run();
+ArchiveReferenceChecks.Run();
 
 static class Checks
 {

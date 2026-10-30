@@ -37,6 +37,7 @@ namespace RimExodus.Maps
                 Scribe.saver.InitSaving(path, "archivedMap");
                 Map current = map;
                 Scribe_Deep.Look(ref current, "map");
+                RegisterSavingExternalReferences(ExternalReferences(map), things.Cast<ILoadReferenceable>().Append(map));
                 Scribe.saver.FinalizeSaving();
                 byte[] xml = File.ReadAllBytes(path);
                 var document = new XmlDocument();
@@ -258,21 +259,44 @@ namespace RimExodus.Maps
                     throw new InvalidDataException($"Cannot restore an identity still present in the game: {value.GetUniqueLoadID()}.");
                 if (seen.Add(value)) directory.RegisterLoaded(value);
             }
-            foreach (Faction faction in Find.FactionManager.AllFactionsListForReading) Register(faction);
+            foreach (ILoadReferenceable value in ExternalReferences(restoringMap)) Register(value);
+        }
+
+        // A map archive is only one part of the game save. Acknowledge the exact
+        // external objects that the restore path can resolve; unknown IDs still warn.
+        internal static void RegisterSavingExternalReferences(IEnumerable<ILoadReferenceable> external,
+            IEnumerable<ILoadReferenceable> saved)
+        {
+            if (!Prefs.DevMode) return;
+            var seen = new HashSet<ILoadReferenceable>(saved, ReferenceComparer.Instance);
+            foreach (ILoadReferenceable value in external)
+                if (CanRegisterExternalReference(value) && seen.Add(value))
+                    Scribe.saver.loadIDsErrorsChecker.RegisterDeepSaved(value, "archiveExternal");
+        }
+
+        internal static IEnumerable<ILoadReferenceable> ExternalReferences(Map restoringMap)
+        {
+            foreach (Faction faction in Find.FactionManager.AllFactionsListForReading) yield return faction;
             if (ModsConfig.IdeologyActive && Find.IdeoManager != null)
-                foreach (Ideo ideo in Find.IdeoManager.IdeosListForReading) Register(ideo);
-            foreach (Quest quest in Find.QuestManager.QuestsListForReading) Register(quest);
-            foreach (WorldObject obj in Find.WorldObjects.AllWorldObjects) Register(obj);
-            foreach (PocketMapParent parent in Find.World.pocketMaps) Register(parent);
-            foreach (Pawn pawn in Find.WorldPawns.AllPawnsAliveOrDead) Register(pawn);
+                foreach (Ideo ideo in Find.IdeoManager.IdeosListForReading) yield return ideo;
+            foreach (Quest quest in Find.QuestManager.QuestsListForReading) yield return quest;
+            foreach (WorldObject obj in Find.WorldObjects.AllWorldObjects) yield return obj;
+            foreach (PocketMapParent parent in Find.World.pocketMaps) yield return parent;
+            foreach (Pawn pawn in Find.WorldPawns.AllPawnsAliveOrDead) yield return pawn;
+            foreach (Battle battle in Find.BattleLog.Battles)
+            {
+                yield return battle;
+                foreach (LogEntry entry in battle.Entries) yield return entry;
+            }
+            foreach (LogEntry entry in Find.PlayLog.AllEntries) yield return entry;
             var things = new List<Thing>();
             foreach (Map other in Find.Maps)
             {
                 if (other == restoringMap) continue;
-                Register(other);
+                yield return other;
                 things.Clear();
                 ThingOwnerUtility.GetAllThingsRecursively(other, things);
-                foreach (Thing thing in things) Register(thing);
+                foreach (Thing thing in things) yield return thing;
             }
         }
 
