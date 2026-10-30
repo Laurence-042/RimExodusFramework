@@ -11,7 +11,6 @@ namespace RimExodus.Maps
     /// <summary>A consumer supplies visible source maps, never simulation or camera-update callbacks.</summary>
     public sealed class MapRenderService
     {
-        public MapRenderDiagnostics Diagnostics { get; } = new MapRenderDiagnostics();
         private readonly Dictionary<string, Action<Map, List<MapRenderPlan>>> providers =
             new Dictionary<string, Action<Map, List<MapRenderPlan>>>();
         private readonly Dictionary<Map, MapRenderPlan> views = new Dictionary<Map, MapRenderPlan>();
@@ -81,9 +80,6 @@ namespace RimExodus.Maps
                 }
             }
             scratch.Clear();
-#if RIMWORLD_1_7
-            Diagnostics.BeginFrame(host, views.Values);
-#endif
 #if !RIMWORLD_1_7
             if (views.Count == 0) { ReleaseClear(); return; }
             if (clearCamera != Find.Camera)
@@ -114,7 +110,6 @@ namespace RimExodus.Maps
         }
         public void Clear()
         {
-            Diagnostics.StopCapture();
             views.Clear(); scratch.Clear(); host = null; frame = -1;
 #if RIMWORLD_1_7
             foreach (var clipper in clippers.Values) clipper.Dispose();

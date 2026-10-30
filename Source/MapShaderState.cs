@@ -114,25 +114,11 @@ namespace RimExodus.Maps
             private static bool Prefix(ref MeshDrawCommand command)
             {
                 var plan = MapRenderScope.Current;
-                var diagnostics = MapRenderDiagnostics.Capturing;
-                if (plan == null)
-                {
-                    if (diagnostics?.Sampling == true) diagnostics.Observe(null, command, command);
-                    return true;
-                }
-                var original = command;
+                if (plan == null) return true;
                 command = MapRuntime.Current.Rendering.Clip(command, plan);
-                if (command.Mesh == null)
-                {
-                    if (diagnostics?.Sampling == true) diagnostics.Observe(plan, original, command);
-                    return false;
-                }
+                if (command.Mesh == null) return false;
                 command = Freeze(command, plan.Transform.Matrix);
-                bool submit = diagnostics == null || diagnostics.ShouldSubmit(plan);
-                if (diagnostics?.Sampling == true) diagnostics.Observe(plan, original, command, !submit);
-                // Apply filtering only after the normal clip/freeze path; callbacks and selected-map data are identical.
-                // A diagnostic I/O failure restores submission immediately.
-                return submit || diagnostics?.Active != true;
+                return true;
             }
         }
 #else
