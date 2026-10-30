@@ -32,6 +32,8 @@ CorePatchInstallationChecks.Run();
 RenderGateChecks.Run(game);
 DrawCaptureChecks.Run();
 NativeRenderChecks.Run();
+RenderDiagnosticChecks.Run();
+RenderViewCompatChecks.Run();
 
 static class Checks
 {

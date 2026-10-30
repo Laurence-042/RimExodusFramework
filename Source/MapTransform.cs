@@ -32,6 +32,19 @@ namespace RimExodus.Maps
         public Vector3 ToDisplay(Vector3 local) => Matrix.MultiplyPoint3x4(local);
         public Vector3 ToLocal(Vector3 display) => Inverse.MultiplyPoint3x4(display);
         public Vector3 DirectionToDisplay(Vector3 local) => Matrix.MultiplyVector(local);
+        /// <summary>Conservative display-space AABB of a source-local box, including rotation/scale.
+        /// Only for visibility tests; this is not a grid ownership or collision query.</summary>
+        public void BoundsToDisplay(Vector3 min, Vector3 max, out Vector3 displayMin, out Vector3 displayMax)
+        {
+            Vector3 center = ToDisplay((min + max) * 0.5f);
+            Vector3 extent = (max - min) * 0.5f;
+            var radius = new Vector3(
+                Mathf.Abs(Matrix.m00) * extent.x + Mathf.Abs(Matrix.m01) * extent.y + Mathf.Abs(Matrix.m02) * extent.z,
+                Mathf.Abs(Matrix.m10) * extent.x + Mathf.Abs(Matrix.m11) * extent.y + Mathf.Abs(Matrix.m12) * extent.z,
+                Mathf.Abs(Matrix.m20) * extent.x + Mathf.Abs(Matrix.m21) * extent.y + Mathf.Abs(Matrix.m22) * extent.z);
+            displayMin = center - radius;
+            displayMax = center + radius;
+        }
         public Vector3 ConvertPointTo(MapTransform destination, Vector3 local) => destination.ToLocal(ToDisplay(local));
         public Vector3 ConvertDirectionTo(MapTransform destination, Vector3 local)
             => destination.Inverse.MultiplyVector(DirectionToDisplay(local));

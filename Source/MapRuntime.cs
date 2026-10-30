@@ -83,6 +83,9 @@ namespace RimExodus.Maps
                 {
                     InstallCorePatches(harmony);
                     LongEventHandler.ExecuteWhenFinished(() => MapPreviewGenerationPatch.Register(harmony));
+#if RIMWORLD_1_7
+                    LongEventHandler.ExecuteWhenFinished(() => IsoRimCullingCompat.Register(harmony));
+#endif
                     LongEventHandler.ExecuteWhenFinished(() => ReportBindings(harmony));
                     installed = true;
                 }

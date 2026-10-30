@@ -26,6 +26,10 @@ namespace RimExodus.Maps
     {
         /// <summary>True only inside the original frame update of a registered neighboring view.</summary>
         public static bool IsNativeView => MapRenderScope.NeighborActive;
+        /// <summary>The current thread's original map callback scope, or null outside it.
+        /// Source identifies the local coordinate system; Transform maps it to display space.
+        /// Read synchronously only: do not retain this context or use it as simulation ownership.</summary>
+        public static MapRenderPlan CurrentNativeView => MapRenderScope.Current;
         public readonly Map Source;
         public readonly MapTransform Transform;
         public readonly CellRect LocalView;
