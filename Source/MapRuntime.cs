@@ -16,6 +16,7 @@ namespace RimExodus.Maps
         private readonly Dictionary<string, Func<Map, bool>> stopPolicies = new Dictionary<string, Func<Map, bool>>();
         private int nextGeneration;
         public MapRuntime(Game game) { }
+        public override void GameComponentTick() => TickRates.ApplyPositionChanges();
         public static MapRuntime Current => Verse.Current.Game?.GetComponent<MapRuntime>();
         public void SetStopPolicy(string owner, Func<Map, bool> policy) => stopPolicies[owner] = policy;
         public bool StoppedByPolicy(Map map)
@@ -78,7 +79,9 @@ namespace RimExodus.Maps
                 var harmony = new Harmony("RimExodus.Maps");
                 try
                 {
-                    harmony.PatchAll(typeof(MapModule).Assembly);
+                    InstallCorePatches(harmony);
+                    LongEventHandler.ExecuteWhenFinished(() => MapPreviewGenerationPatch.Register(harmony));
+                    LongEventHandler.ExecuteWhenFinished(() => ReportBindings(harmony));
                     installed = true;
                 }
                 catch (Exception error)
@@ -89,6 +92,26 @@ namespace RimExodus.Maps
                     throw;
                 }
             }
+        }
+        internal static void InstallCorePatches(Harmony harmony)
+        {
+            // ClassProcessor also recognizes convention-named Prefix/Finalizer methods on
+            // unannotated helpers. Soft compatibility hooks must reach their manual Register path.
+            foreach (var type in typeof(MapModule).Assembly.GetTypes())
+                if (Attribute.IsDefined(type, typeof(HarmonyPatch))
+                    && !Attribute.IsDefined(type, typeof(CombatPatchAttribute)))
+                    harmony.CreateClassProcessor(type).Patch();
+        }
+
+        internal static void ReportBindings(Harmony harmony)
+        {
+            int count = 0;
+            foreach (var method in harmony.GetPatchedMethods())
+            {
+                count++;
+                Log.Message($"[REF:{harmony.Id}] patched: {method.DeclaringType?.FullName}::{method.Name}");
+            }
+            Log.Message($"[REF:{harmony.Id}] GetPatchedMethods: {count} methods.");
         }
     }
 

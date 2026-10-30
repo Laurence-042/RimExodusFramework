@@ -1,8 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Reflection;
-using System.Reflection.Emit;
-using HarmonyLib;
 using Verse;
 
 namespace RimExodus.Maps
@@ -11,16 +7,24 @@ namespace RimExodus.Maps
     {
         private string owner;
         private Action drain;
+        private bool draining;
+        private int ownerThread;
+        private readonly object gate = new object();
+        private bool external;
         public Map GeneratingMap { get; private set; }
-        public bool IsBusy => owner != null;
+        public bool IsBusy { get { lock (gate) return owner != null || external; } }
         public bool IsOwnedBy(string requestedOwner) => owner != null && owner == requestedOwner;
         public void Acquire(string requestedOwner, Action drainSynchronously)
         {
-            if (owner != null || MapGenerator.mapBeingGenerated != null)
-                throw new InvalidOperationException("Map generation static state is already leased.");
-            if (drainSynchronously == null) throw new ArgumentNullException(nameof(drainSynchronously));
-            owner = requestedOwner ?? throw new ArgumentNullException(nameof(requestedOwner));
-            drain = drainSynchronously;
+            lock (gate)
+            {
+                if (owner != null || external || MapGenerator.mapBeingGenerated != null)
+                    throw new InvalidOperationException("Map generation static state is already occupied.");
+                if (drainSynchronously == null) throw new ArgumentNullException(nameof(drainSynchronously));
+                owner = requestedOwner ?? throw new ArgumentNullException(nameof(requestedOwner));
+                drain = drainSynchronously;
+                ownerThread = System.Threading.Thread.CurrentThread.ManagedThreadId;
+            }
         }
         public void Bind(string requestedOwner, Map map)
         {
@@ -29,56 +33,46 @@ namespace RimExodus.Maps
         }
         public void Release(string requestedOwner)
         {
-            if (owner == null) return;
-            if (owner != requestedOwner) throw new InvalidOperationException("Map generation owner mismatch.");
-            owner = null; drain = null; GeneratingMap = null;
+            lock (gate)
+            {
+                if (owner == null) return;
+                if (owner != requestedOwner) throw new InvalidOperationException("Map generation owner mismatch.");
+                owner = null; drain = null; GeneratingMap = null;
+                System.Threading.Monitor.PulseAll(gate);
+            }
+        }
+        internal void EnterExternal()
+        {
+            lock (gate)
+            {
+                while (owner != null || external)
+                {
+                    if (ownerThread == System.Threading.Thread.CurrentThread.ManagedThreadId)
+                        throw new InvalidOperationException("Nested synchronous map generation cannot overwrite active generation state.");
+                    System.Threading.Monitor.Wait(gate, 100);
+                    if (MapRuntime.Current?.Generation != this)
+                        throw new OperationCanceledException("The game changed while map generation was waiting.");
+                }
+                external = true;
+                ownerThread = System.Threading.Thread.CurrentThread.ManagedThreadId;
+            }
+        }
+        internal void ExitExternal()
+        {
+            lock (gate) { external = false; ownerThread = 0; System.Threading.Monitor.PulseAll(gate); }
         }
         public void Drain()
         {
             if (owner == null) return;
-            drain();
-            if (owner != null) throw new InvalidOperationException("Map generation did not release its lease.");
-        }
-    }
-    [HarmonyPatch(typeof(MapGenerator), nameof(MapGenerator.GenerateMap))]
-    internal static class GenerationLeasePatch
-    {
-        private static void Prefix() => MapRuntime.Current?.Generation.Drain();
-    }
-#if RIMWORLD_1_7
-    [HarmonyPatch]
-    internal static class GeneratingRenderGatePatch
-    {
-        private static MethodBase TargetMethod() => AccessTools.Method(
-            AccessTools.TypeByName("RimWorldWaylith.Rendering.MapRenderFeature"), "CaptureFrame")
-            ?? throw new MissingMethodException("MapRenderFeature.CaptureFrame");
-        private static Map Gate(Map generating)
-        {
-            return generating != null && generating != Find.CurrentMap
-                && MapRuntime.Current?.Generation.GeneratingMap == generating ? null : generating;
-        }
-        private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-        {
-            int count = 0;
-            foreach (CodeInstruction code in instructions)
+            if (draining || ownerThread != System.Threading.Thread.CurrentThread.ManagedThreadId)
+                throw new InvalidOperationException("Cannot complete map generation recursively or from another thread.");
+            draining = true;
+            try
             {
-                bool vanilla = code.opcode == OpCodes.Ldsfld && code.operand is FieldInfo field
-                    && field.DeclaringType == typeof(MapGenerator) && field.Name == nameof(MapGenerator.mapBeingGenerated);
-                bool exodus = code.opcode == OpCodes.Call && code.operand is MethodInfo method
-                    && method.DeclaringType?.FullName == "RimExodus.SeamlessWaylithMapRenderCompat"
-                    && method.Name == "MapBeingGeneratedForRenderGate" && method.IsStatic
-                    && method.ReturnType == typeof(Map) && method.GetParameters().Length == 0;
-                yield return code;
-                if (vanilla || exodus)
-                {
-                    // Keep the original producer so RimExodus can still replace its field read if it runs later.
-                    // If it already ran, consume its result: null must stay null for its own generation policy.
-                    yield return new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(GeneratingRenderGatePatch), nameof(Gate)));
-                    count++;
-                }
+                drain();
+                if (owner != null) throw new InvalidOperationException("Map generation did not release its registered owner.");
             }
-            if (count != 1) throw new InvalidOperationException($"Expected one generating-map render gate; found {count}.");
+            finally { draining = false; }
         }
     }
-#endif
 }

@@ -19,36 +19,39 @@ Vehicle Map Framework 的地图面向载具设计，并以叠加在 worldtile �
 | 无 worldtile 地图 | 口袋图创建、注册和公共 sourceMap 宿主服务 |
 | 区域模板与 prefab | 任意区域选择器，Home Area 是其中一种；逐实例 Scribe、地形、基架、屋顶和重建回调 |
 | 整图归档 | 全图选择的原版持久状态层；保留地图身份，支持卸载和恢复 |
-| tick 速率 | 0–100% 执行机会控制；0 表示休眠，消费方提供停图策略 |
-| 跨图战斗基础 | 开关、战斗租约及逐图 LOS/掩体接口；完整原版跨图射击链尚未完成 |
+| tick 速率 | 精确 0–100% 执行机会控制、逐图错峰、全速区域回调；0% 区外注销/恢复注册，可选移动补偿，消费方提供停图策略 |
+| 跨图战斗 | 原版/CE 桥接、逐图显式启用、目标与弹丸状态失效；仅消费方请求时安装战斗补丁，迁入结果待游戏验收 |
 
 区域模板、封存与 prefab 共用内容模型；整图归档是范围覆盖全图并包含地图级状态的特例。区域清空/替换事务、资源池和 Gravship 搬运尚未全部迁入。不要将 1.0.0 解释为所有规划能力均已完成。API、生命周期契约和剩余工作见 [地图模块](doc/地图模块.md)，最初调研见 [迁移备忘录](doc/迁移备忘录.md)。
 
-Delta-V 已切换为唯一 REF 后端，保留船壳选择、宇宙运动、飞船身份、标记展开与战斗策略。RimExodus 尚未接入 REF；本次未修改它。
+Delta-V 已切换为唯一 REF 后端，保留船壳选择、宇宙运动、飞船身份、标记展开与战斗策略。RimExodus 已接入可选 REF 后端，默认保留 legacy，开关重启生效；REF 模式的生成、渲染、降频、区域恢复及原版/CE 战斗接线仍需游戏内验收。
 
 ## 安装与依赖
 
-需要 RimWorld 1.6 或 1.7 和 Harmony。将本目录作为独立 Mod 安装并启用，加载顺序为 Harmony → RimExodus Framework → Delta-V。REF 的 DLL 只在 REF 的版本化 `Assemblies` 目录加载；消费方不要再把它打包进自己的 `Assemblies`。
+需要 RimWorld 1.6 或 1.7 和 Harmony。将本目录作为独立 Mod 安装并启用，加载顺序为 Harmony → RimExodus Framework → Delta-V / RimExodus。REF 的 DLL 只在 REF 的版本化 `Assemblies` 目录加载；消费方不要再把它打包进自己的 `Assemblies`。
 
 ## 构建
 
-需要 `just`、PowerShell 7 和对应 .NET SDK：1.7 使用 SDK 10；1.6 使用可构建 net48 的 SDK。可用 `DOTNET_EXE` 指定 dotnet 可执行文件。本机引用默认位置见 [引用配置](build/RimWorldReferences.props)，可用 MSBuild 的 `RimWorldDir`、`HarmonyPath` 属性或同名环境变量覆盖。1.6 使用编译期 NuGet 引用，不分发游戏/Harmony 程序集。
+需要 `just` 和对应 .NET SDK：1.7 使用 SDK 10；1.6 使用可构建 net48 的 SDK。Windows 构建入口使用系统自带的 `powershell.exe`（Windows PowerShell 5.1），无需另装 PowerShell 7。可用 `DOTNET_EXE` 指定 dotnet 可执行文件。本机引用默认位置见 [引用配置](build/RimWorldReferences.props)，可用 MSBuild 的 `RimWorldDir`、`HarmonyPath` 属性或同名环境变量覆盖。1.6 使用编译期 NuGet 引用，不分发游戏/Harmony 程序集。
 
 ```powershell
 just build       # 1.7 Release
 just build 1.6   # 1.6 Release
 just test        # 1.7 离线回归
+just test-services # SDK 8+，版本无关的调度/生成协调检查
 ```
 
 输出为 `<游戏版本>/Assemblies/RimExodus.Maps.dll`，不提交构建产物。独立克隆可以直接构建；不要求 Delta-V 或 RimExodus 源码。若同级存在 RimExodus，测试会只读链接其 transpiler，额外检查补丁组合顺序。
 
-Delta-V 的 `just build` 会先调用同级 REF 的 `just build`，成功后复制 DLL 到 Delta-V 的 `References/REF/<版本>/` 作为编译输入，再构建 Delta-V。运行时仍由独立 REF Mod 提供程序集。
+Delta-V 与 RimExodus 的 `just build` 会先调用同级 REF 的 `just build`，成功后复制 DLL 到各消费方的 `References/REF/<版本>/` 作为编译输入，再构建消费方。运行时仍由独立 REF Mod 提供程序集。
 
 ## 验证
 
-迁出前已通过 175 项离线检查，覆盖调度、坐标、1.7 实际程序集绑定、与 RimExodus 的门禁组合及原生绘制捕获/提交。用户已确认修正后的非聚焦护盾与导弹架上层显示正常。独立 Mod 的加载顺序、区域存读档、整图归档往返及双版本实机回归仍需游戏内验收；代理不自动启动游戏。
+本轮 RE 接入后，1.6 与 1.7 的 REF/RE 标准构建均通过，零警告、零错误；`just test-services` 的 2,135 项检查通过。该检查使用生产算法及最小引擎占位，不覆盖实际 tick 注册、Harmony、Scribe 或 GPU。RE 构建已采用 Delta-V 的 REF 优先构建流程。已修复自动扫描误收 MapPreview 手动兼容钩子导致的初始化失败；1.7 的 `just test` 共 180 项检查通过，覆盖调度、坐标、绑定签名、渲染门禁组合及绘制捕获/提交，其中新增安装回归在实际游戏程序集上执行生产 Harmony 安装循环并成功绑定 29 个方法。1.6 PatchAll 验证器缺少原路径游戏程序集，绑定结果待补。`RimExodus` 的 `doc/REF接入实施与验收.md` 记录完整验收矩阵。用户已确认修正后的非聚焦护盾与导弹架上层显示正常。独立 Mod 的加载顺序、区域存读档、整图归档往返及双版本实机回归仍需游戏内验收；代理不自动启动游戏。
 
 ## 目录
+
+兼容层注册边界与 RE 两后端组合审计见同级 `RimExodus/doc/兼容层注册审计.md`；消费方 `just test-compat` 包含真实 Harmony 绑定及缺失、延迟加载和签名异常的模拟回归。
 
 ```text
 About/                  Mod 元数据

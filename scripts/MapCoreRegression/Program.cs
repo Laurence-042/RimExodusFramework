@@ -28,6 +28,7 @@ if (args.Length > 1 && args[0] == "api")
 }
 Checks.Run();
 BindingChecks.Run(game);
+CorePatchInstallationChecks.Run();
 RenderGateChecks.Run(game);
 DrawCaptureChecks.Run();
 

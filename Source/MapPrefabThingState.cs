@@ -63,6 +63,10 @@ namespace RimExodus.Maps
 
         public static List<Thing> Instantiate(IReadOnlyList<MapPrefabThingEntry> entries, string label, Faction faction,
             bool clone = true)
+            => Instantiate(entries, label, faction, clone, false);
+
+        public static List<Thing> Instantiate(IReadOnlyList<MapPrefabThingEntry> entries, string label, Faction faction,
+            bool clone, bool preserveFactions)
         {
             using var operation = new ScribeOperation(loading: true);
             var result = new List<Thing>();
@@ -98,14 +102,14 @@ namespace RimExodus.Maps
                     // Scribe knows every deep-loaded object, including turret guns outside IThingHolder.
                     // FinalizeLoading clears this registry; keep it until old-ID references are resolved.
                     IExposable[] loaded = Scribe.loader.crossRefs.crossReferencingExposables.ToArray();
-                    if (!clone)
+                    if (!clone || preserveFactions)
                     {
                         var ids = new HashSet<string>(loaded.OfType<ILoadReferenceable>()
                             .Where(MapArchive.CanRegisterExternalReference).Select(t => t.GetUniqueLoadID()));
                         MapArchive.RegisterExternalReferences(null, ids);
                     }
                     Scribe.loader.FinalizeLoading();
-                    if (clone) Reidentify(loaded, faction);
+                    if (clone) Reidentify(loaded, faction, preserveFactions);
                     result = bundle.things ?? new List<Thing>();
                     if (result.Count != entries.Count || result.Any(t => t == null))
                         throw new InvalidDataException("Scribe returned an incomplete prefab.");
@@ -140,12 +144,12 @@ namespace RimExodus.Maps
             return target;
         }
 
-        private static void Reidentify(IReadOnlyList<IExposable> loaded, Faction faction)
+        private static void Reidentify(IReadOnlyList<IExposable> loaded, Faction faction, bool preserveFactions)
         {
             foreach (Thing item in loaded.OfType<Thing>())
             {
                 item.questTags = null;
-                if (item.def.CanHaveFaction) item.SetFactionDirect(faction);
+                if (!preserveFactions && item.def.CanHaveFaction) item.SetFactionDirect(faction);
                 if (!item.def.HasThingIDNumber) continue;
                 item.thingIDNumber = -1;
                 ThingIDMaker.GiveIDTo(item);

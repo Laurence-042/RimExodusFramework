@@ -12,6 +12,10 @@ namespace RimExodus.Maps
     {
         public Faction Faction;
         public bool Clone = true;
+        public bool PreserveFactions;
+        // Applies to all content layers, including complete multi-cell footprints.
+        public Func<Map, IntVec3, bool> ProtectCell;
+        public bool SkipProtectedThings = true;
         public bool OmitSpace;
         public MapParent Parent;
         public Action<Map, IntVec3> FoundationsPlaced;
@@ -24,6 +28,7 @@ namespace RimExodus.Maps
         public Map Map;
         public readonly List<Thing> Things = new List<Thing>();
         public readonly List<string> Errors = new List<string>();
+        public readonly List<MapPrefabThingEntry> SkippedThings = new List<MapPrefabThingEntry>();
         public bool Success => Errors.Count == 0;
     }
 
@@ -33,6 +38,11 @@ namespace RimExodus.Maps
         public static MapPrefabDocument Capture(Map map, IRegionSelection selection, string name,
             Func<Thing, bool> include = null, Func<IEnumerable<Thing>, IEnumerable<Thing>> order = null,
             bool includeMapState = false)
+            => Capture(map, selection, name, include, order, includeMapState, false);
+
+        public static MapPrefabDocument Capture(Map map, IRegionSelection selection, string name,
+            Func<Thing, bool> include, Func<IEnumerable<Thing>, IEnumerable<Thing>> order,
+            bool includeMapState, bool includeIntersectingFootprints)
         {
             if (map == null || map.Disposed) throw new ArgumentException("A live source map is required.");
             var cells = new HashSet<IntVec3>(selection.Cells(map));
@@ -50,7 +60,8 @@ namespace RimExodus.Maps
                     throw new InvalidDataException("Could not capture native map state.");
                 return doc;
             }
-            IEnumerable<Thing> things = map.listerThings.AllThings.Where(t => cells.Contains(t.Position)
+            IEnumerable<Thing> things = map.listerThings.AllThings.Where(t => (cells.Contains(t.Position)
+                || includeIntersectingFootprints && t.OccupiedRect().Any(cells.Contains))
                 && (include?.Invoke(t) ?? (t.def.category == ThingCategory.Building || t.def.category == ThingCategory.Item)));
             things = order != null ? order(things) : things.OrderBy(t => t.def.building?.isAttachment == true ? 1 : 0)
                 .ThenByDescending(t => t.def.category == ThingCategory.Building).ThenBy(t => t.thingIDNumber);
@@ -95,27 +106,49 @@ namespace RimExodus.Maps
             foreach (IntVec3 cell in doc.mask)
                 if (!(root + PrefabUtility.GetAdjustedLocalPosition(cell, rotation)).InBounds(map))
                     result.Errors.Add("Selected region extends outside the destination map.");
+            foreach (var (_, local) in terrain.GetTerrain())
+                if (!(root + PrefabUtility.GetAdjustedLocalPosition(local, rotation)).InBounds(map))
+                    result.Errors.Add("Terrain extends outside the destination map.");
+            foreach (var entry in doc.foundations)
+                if (!(root + PrefabUtility.GetAdjustedLocalPosition(entry.pos, rotation)).InBounds(map))
+                    result.Errors.Add("Foundation extends outside the destination map.");
+            foreach (var entry in doc.roofs)
+                if (!(root + PrefabUtility.GetAdjustedLocalPosition(entry.pos, rotation)).InBounds(map))
+                    result.Errors.Add("Roof extends outside the destination map.");
             foreach (MapPrefabThingEntry entry in doc.thingEntries)
             {
                 IntVec3 cell = root + PrefabUtility.GetAdjustedThingLocalPosition(entry.def, rotation, entry.pos);
                 Rot4 facing = entry.def.rotatable ? rotation.Rotated(Rot4.GetRelativeRotation(Rot4.North, entry.rotation)) : entry.def.defaultPlacingRot;
                 if (!GenAdj.OccupiedRect(cell, facing, entry.def.Size).InBounds(map)) result.Errors.Add($"Out of bounds: {entry.def.defName}.");
+                if (!options.SkipProtectedThings && options.ProtectCell != null
+                    && entry.def.category == ThingCategory.Building
+                    && GenAdj.OccupiedRect(cell, facing, entry.def.Size).Any(c => options.ProtectCell(map, c)))
+                    result.Errors.Add($"Protected footprint: {entry.def.defName} at {cell}.");
             }
             if (!result.Success) return result;
             List<Thing> loaded;
-            try { loaded = MapPrefabThingState.Instantiate(doc.thingEntries, doc.name, options.Faction, options.Clone); }
+            try { loaded = MapPrefabThingState.Instantiate(doc.thingEntries, doc.name, options.Faction, options.Clone, options.PreserveFactions); }
             catch (Exception error) { result.Errors.Add(error.ToString()); return result; }
             IntVec3 first = IntVec3.Invalid;
             foreach (PrefabFoundationEntry entry in doc.foundations)
             {
                 IntVec3 cell = root + PrefabUtility.GetAdjustedLocalPosition(entry.pos, rotation);
+                if (options.ProtectCell?.Invoke(map, cell) == true) continue;
                 map.terrainGrid.SetFoundation(cell, entry.def);
                 if (map.terrainGrid.FoundationAt(cell) != entry.def)
                 { result.Errors.Add($"Foundation rejected at {cell}."); return result; }
                 if (!first.IsValid) first = cell;
             }
             options.FoundationsPlaced?.Invoke(map, first);
-            PrefabUtility.SpawnPrefab(terrain, map, position, rotation, options.Faction);
+            // Place cells individually so protected footprints cannot be overwritten by a terrain pass.
+            foreach (var (data, local) in terrain.GetTerrain())
+            {
+                IntVec3 cell = root + PrefabUtility.GetAdjustedLocalPosition(local, rotation);
+                if (options.ProtectCell?.Invoke(map, cell) == true) continue;
+                if (!Rand.Chance(data.chance)) continue;
+                map.terrainGrid.SetTerrain(cell, data.def);
+                if (data.color != null) map.terrainGrid.SetTerrainColor(cell, data.color);
+            }
             for (int i = 0; i < loaded.Count; i++)
             {
                 Thing thing = loaded[i];
@@ -124,6 +157,13 @@ namespace RimExodus.Maps
                 Rot4 facing = entry.def.rotatable ? rotation.Rotated(Rot4.GetRelativeRotation(Rot4.North, entry.rotation)) : entry.def.defaultPlacingRot;
                 try
                 {
+                    if (options.ProtectCell != null && thing.def.category == ThingCategory.Building
+                        && GenAdj.OccupiedRect(cell, facing, thing.def.Size).Any(c => options.ProtectCell(map, c)))
+                    {
+                        result.SkippedThings.Add(entry);
+                        if (!options.SkipProtectedThings) result.Errors.Add($"Protected footprint: {entry.def.defName} at {cell}.");
+                        continue;
+                    }
                     if (options.Clone) { thing.spawnedTick = Find.TickManager.TicksGame; thing.despawnedTick = -1; }
                     options.BeforeSpawn?.Invoke(thing, entry, root, rotation);
                     Thing placed = options.PlaceThing != null ? options.PlaceThing(thing, map, cell, facing)
@@ -134,7 +174,10 @@ namespace RimExodus.Maps
                 catch (Exception error) { result.Errors.Add($"{entry.def.defName} at {cell}: {error}"); }
             }
             foreach (PrefabRoofEntry entry in doc.roofs)
-                map.roofGrid.SetRoof(root + PrefabUtility.GetAdjustedLocalPosition(entry.pos, rotation), entry.def);
+            {
+                IntVec3 cell = root + PrefabUtility.GetAdjustedLocalPosition(entry.pos, rotation);
+                if (options.ProtectCell?.Invoke(map, cell) != true) map.roofGrid.SetRoof(cell, entry.def);
+            }
             if (result.Success) options.Completed?.Invoke(map, result.Things, root, rotation);
             return result;
         }

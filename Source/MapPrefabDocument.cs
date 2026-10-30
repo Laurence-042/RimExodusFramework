@@ -83,6 +83,18 @@ namespace RimExodus.Maps
         {
             var xml = new XmlDocument();
             xml.Load(path);
+            return Read(xml, path);
+        }
+
+        public static MapPrefabDocument FromXml(string content)
+        {
+            var xml = new XmlDocument();
+            xml.LoadXml(content);
+            return Read(xml, "embedded prefab");
+        }
+
+        private static MapPrefabDocument Read(XmlDocument xml, string path)
+        {
             XmlElement root = xml.DocumentElement;
             if (root == null || root.Name != "MapPrefab")
             {
@@ -196,13 +208,20 @@ namespace RimExodus.Maps
             {
                 Directory.CreateDirectory(directory);
             }
+            File.WriteAllText(path, ToXml(), new UTF8Encoding(false));
+        }
+
+        public string ToXml()
+        {
+            var text = new StringBuilder();
             var settings = new XmlWriterSettings
             {
                 Indent = true,
                 IndentChars = "  ",
                 Encoding = new UTF8Encoding(false),
+                OmitXmlDeclaration = true,
             };
-            using (XmlWriter writer = XmlWriter.Create(path, settings))
+            using (XmlWriter writer = XmlWriter.Create(text, settings))
             {
                 writer.WriteStartElement("MapPrefab");
                 writer.WriteAttributeString("formatVersion", CurrentFormatVersion.ToString());
@@ -285,6 +304,7 @@ namespace RimExodus.Maps
                 }
                 writer.WriteEndElement();
             }
+            return text.ToString();
         }
 
     }

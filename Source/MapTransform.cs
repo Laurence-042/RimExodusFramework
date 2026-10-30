@@ -9,6 +9,10 @@ namespace RimExodus.Maps
     {
         public readonly Matrix4x4 Matrix;
         public readonly Matrix4x4 Inverse;
+        // Translation-only consumers need no matrix construction or inverse in a per-Thing hot path.
+        public static Vector3 Translate(Vector3 local, IntVec3 offset)
+            => new Vector3(local.x + offset.x, local.y, local.z + offset.z);
+        public static IntVec3 Translate(IntVec3 local, IntVec3 offset) => local + offset;
         public MapTransform(Matrix4x4 matrix)
         {
             for (int row = 0; row < 4; row++)

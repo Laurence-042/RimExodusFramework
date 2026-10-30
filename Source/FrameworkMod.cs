@@ -6,7 +6,8 @@ namespace RimExodus.Maps
     {
         public FrameworkMod(ModContentPack content) : base(content)
         {
-            MapModule.TryInstall();
+            bool installed = MapModule.TryInstall();
+            Log.Message("[REF] FrameworkMod instantiated; map services " + (installed ? "ready." : "unavailable (see installation error)."));
         }
     }
 }

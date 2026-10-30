@@ -120,12 +120,15 @@ namespace RimExodus.Maps
     {
         private readonly bool foreground;
         private readonly string name;
+        private readonly bool preserveRenderLayer;
         private int group;
 #if !RIMWORLD_1_7
         private CommandBuffer buffer;
         private Camera camera;
 #endif
-        public MapDrawBackend(bool foreground, string name) { this.foreground = foreground; this.name = name; }
+        public MapDrawBackend(bool foreground, string name) : this(foreground, name, false) { }
+        public MapDrawBackend(bool foreground, string name, bool preserveRenderLayer)
+        { this.foreground = foreground; this.name = name; this.preserveRenderLayer = preserveRenderLayer; }
         public void Attach(Camera target)
         {
 #if !RIMWORLD_1_7
@@ -135,10 +138,15 @@ namespace RimExodus.Maps
 #endif
         }
         public void BeginFrame()
+            => BeginFrame(false, Color.clear);
+
+        /// <summary>Optional 1.6 color reset; Waylith owns its frame targets and clears.</summary>
+        public void BeginFrame(bool clearColor, Color color)
         {
             group = 0;
 #if !RIMWORLD_1_7
             buffer?.Clear();
+            if (clearColor) buffer?.ClearRenderTarget(true, true, color, 1f);
 #endif
         }
         public void BeginGroup()
@@ -151,6 +159,13 @@ namespace RimExodus.Maps
         public void Draw(MapDrawCommand command)
         {
 #if RIMWORLD_1_7
+            // WaterDepth and other auxiliary passes must retain the engine's layer routing.
+            if (preserveRenderLayer)
+            {
+                if (command.IsNative) { var native = command.Native; Waylith.Rendering.MeshDrawSubmission.Enqueue(in native); }
+                else Graphics.DrawMesh(command.Mesh, command.Matrix, command.Material, command.Layer, null, command.Submesh, command.Properties);
+                return;
+            }
             if (!command.IsNative)
             {
                 MapDrawCapture.Collect(() => Graphics.DrawMesh(command.Mesh, command.Matrix, command.Material,

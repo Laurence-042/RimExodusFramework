@@ -1,12 +1,19 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using RimWorld;
 using UnityEngine;
 using Verse;
 
 namespace RimExodus.Maps
 {
+    internal sealed class CombatLifetime
+    {
+        private Action end;
+        internal CombatLifetime(Action end) { this.end = end; }
+        internal void Invalidate() { var action = end; end = null; action?.Invoke(); }
+    }
     public readonly struct MapSightSegment
     {
         public readonly Map Map;
@@ -47,8 +54,65 @@ namespace RimExodus.Maps
     /// <summary>Combat permission and map lifetime, independent of the caller's trajectory/physics.</summary>
     public sealed class CrossMapCombat
     {
+        internal readonly ConditionalWeakTable<Verb, MapCombatCellTargets.Entry> CellVerbs = new ConditionalWeakTable<Verb, MapCombatCellTargets.Entry>();
+        internal readonly ConditionalWeakTable<Thing, MapCombatCellTargets.Entry> CellCasters = new ConditionalWeakTable<Thing, MapCombatCellTargets.Entry>();
+        internal readonly ConditionalWeakTable<Verb, MapCombatCoordinates.CastEntry> CastTargets = new ConditionalWeakTable<Verb, MapCombatCoordinates.CastEntry>();
+        internal readonly ConditionalWeakTable<Projectile, CombatLifetime> Projectiles = new ConditionalWeakTable<Projectile, CombatLifetime>();
+        internal readonly ConditionalWeakTable<Thing, CombatExtendedBridge.ProjectileTargetState> CeProjectiles = new ConditionalWeakTable<Thing, CombatExtendedBridge.ProjectileTargetState>();
         private readonly Dictionary<Map, int> inUse = new Dictionary<Map, int>();
-        internal void Forget(Map map) => inUse.Remove(map);
+        private readonly Dictionary<Map, MapCombatPolicy> policies = new Dictionary<Map, MapCombatPolicy>();
+        private readonly Dictionary<Map, List<System.WeakReference<CombatLifetime>>> lifetimes = new Dictionary<Map, List<System.WeakReference<CombatLifetime>>>();
+        internal CombatLifetime Track(Map source, Map target, Action end)
+        {
+            var lifetime = new CombatLifetime(end);
+            TrackOnMap(source, lifetime);
+            if (target != source) TrackOnMap(target, lifetime);
+            return lifetime;
+        }
+        private void TrackOnMap(Map map, CombatLifetime lifetime)
+        {
+            if (map == null) return;
+            if (!lifetimes.TryGetValue(map, out var list)) lifetimes[map] = list = new List<System.WeakReference<CombatLifetime>>();
+            if (list.Count >= 128) list.RemoveAll(w => !w.TryGetTarget(out _));
+            list.Add(new System.WeakReference<CombatLifetime>(lifetime));
+        }
+        public void Invalidate(Map map)
+        {
+            if (map == null) return;
+            if (lifetimes.TryGetValue(map, out var list))
+            {
+                lifetimes.Remove(map);
+                foreach (var weak in list) if (weak.TryGetTarget(out var lifetime)) lifetime.Invalidate();
+            }
+            inUse.Remove(map);
+        }
+        public void InvalidateOwner(string owner)
+        {
+            foreach (var pair in policies) if (pair.Value.Owner == owner) Invalidate(pair.Key);
+        }
+        internal void InvalidatePolicy(MapCombatPolicy policy)
+        {
+            foreach (var pair in policies) if (pair.Value == policy) Invalidate(pair.Key);
+        }
+        public bool HasEnabledMaps => policies.Count != 0;
+        public bool DiagnosticLogging { get; set; }
+        internal MapCombatPolicy Policy(Map map) => map != null && !map.Disposed
+            && policies.TryGetValue(map, out var p) && p.Enabled && p.Available?.Invoke(map) != false ? p : null;
+        public void Enable(Map map, MapCombatPolicy policy)
+        {
+            if (policy == null) throw new ArgumentNullException(nameof(policy));
+            MapCombatModule.Install();
+            MapRuntime.Current.Register(map, policy.Owner);
+            if (policies.TryGetValue(map, out var previous) && previous != policy) Invalidate(map);
+            policies[map] = policy;
+        }
+        public void Disable(Map map)
+        {
+            if (map == null) return;
+            policies.Remove(map);
+            Invalidate(map);
+        }
+        internal void Forget(Map map) => Disable(map);
         public bool IsInUse(Map map) => map != null && inUse.ContainsKey(map);
         public CombatLease Begin(MapCombatDomain domain, Map source, MapTarget target)
         {
@@ -61,13 +125,11 @@ namespace RimExodus.Maps
         private void Retain(Map map)
         {
             inUse.TryGetValue(map, out int count); inUse[map] = count + 1;
-            MapRuntime.Current.TickRates.Pin(map);
         }
         private void Release(Map map)
         {
             if (!inUse.TryGetValue(map, out int count)) return;
             if (count == 1) inUse.Remove(map); else inUse[map] = count - 1;
-            MapRuntime.Current.TickRates.Unpin(map);
         }
         public sealed class CombatLease : IDisposable
         {
@@ -76,14 +138,16 @@ namespace RimExodus.Maps
             private readonly Map source;
             private readonly MapTarget target;
             private bool disposed;
+            private readonly CombatLifetime lifetime;
             internal CombatLease(CrossMapCombat service, MapCombatDomain domain, Map source, MapTarget target)
             {
                 this.service = service; this.domain = domain; this.source = source; this.target = target;
                 service.Retain(source);
                 if (source != target.Map) service.Retain(target.Map);
+                lifetime = service.Track(source, target.Map, Dispose);
             }
-            // Closing the domain blocks new leases, but already authorized flights may finish.
-            public bool Valid => !disposed && !source.Disposed && target.Valid;
+            public bool Valid => !disposed && domain.Enabled && !source.Disposed && target.Valid
+                && domain.Allows(source, target.Map);
             public Vector3 TargetInSource => domain.Convert(target.Map, target.Center, source);
             public bool InRange(Vector3 origin, float minRange, float maxRange)
             {
@@ -122,6 +186,7 @@ namespace RimExodus.Maps
                 if (disposed) return;
                 disposed = true; service.Release(source);
                 if (source != target.Map) service.Release(target.Map);
+                lifetime?.Invalidate();
             }
         }
     }
