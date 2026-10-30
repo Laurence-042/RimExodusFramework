@@ -19,6 +19,8 @@ internal static class CorePatchInstallationChecks
             Check(patched.Contains(AccessTools.Method(typeof(Verse.MapGenerator), "GenerateMap")), "generation hooks installed");
             Check(patched.Contains(AccessTools.Method(typeof(Verse.Map), "MapPreTick")), "tick hooks installed");
             Check(patched.Contains(AccessTools.Method(typeof(Verse.Game), "DeinitAndRemoveMap")), "cleanup hook installed");
+            Check(patched.Contains(AccessTools.Method(typeof(Verse.Map), "MapUpdate")), "native rendering frame hook installed");
+            Check(patched.Contains(AccessTools.PropertySetter(typeof(Verse.Current), "Game")), "render resources released on game change");
             var callbacks = patched.Select(Harmony.GetPatchInfo).SelectMany(p =>
                 p.Prefixes.Concat(p.Postfixes).Concat(p.Transpilers).Concat(p.Finalizers))
                 .Where(p => p.owner == harmony.Id).Select(p => p.PatchMethod).ToArray();

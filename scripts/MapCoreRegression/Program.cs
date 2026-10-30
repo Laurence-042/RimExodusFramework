@@ -31,6 +31,7 @@ BindingChecks.Run(game);
 CorePatchInstallationChecks.Run();
 RenderGateChecks.Run(game);
 DrawCaptureChecks.Run();
+NativeRenderChecks.Run();
 
 static class Checks
 {

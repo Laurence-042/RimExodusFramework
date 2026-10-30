@@ -11,6 +11,7 @@ namespace RimExodus.Maps
         public readonly MapTickRates TickRates = new MapTickRates();
         public readonly MapGenerationCoordinator Generation = new MapGenerationCoordinator();
         public readonly CrossMapCombat Combat = new CrossMapCombat();
+        public readonly MapRenderService Rendering = new MapRenderService();
         private readonly Dictionary<Map, string> owners = new Dictionary<Map, string>();
         private readonly Dictionary<Map, int> generations = new Dictionary<Map, int>();
         private readonly Dictionary<string, Func<Map, bool>> stopPolicies = new Dictionary<string, Func<Map, bool>>();
@@ -47,6 +48,7 @@ namespace RimExodus.Maps
             generations.Remove(map);
             TickRates.Forget(map);
             Combat.Forget(map);
+            Rendering.Forget(map);
         }
     }
 
