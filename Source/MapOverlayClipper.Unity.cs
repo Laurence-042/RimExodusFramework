@@ -30,9 +30,17 @@ namespace RimExodus.Maps
                     y == 0 ? bounds.min.y : bounds.max.y, z == 0 ? bounds.min.z : bounds.max.z));
                 min = Vector3.Min(min, p); max = Vector3.Max(max, p);
             }
-            if (!MapOverlayGeometry.IsLargeFlat(min, max, plan.Source.Size.x, plan.Source.Size.z)) return true;
+            // Bounds are a conservative culling volume, not the actual thickness of this submesh.
+            if (!MapOverlayGeometry.HasLargeSpan(min, max, plan.Source.Size.x, plan.Source.Size.z)) return true;
             var positions = mesh.vertices;
             var indices = mesh.GetIndices(submesh);
+            min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue); max = -min;
+            foreach (int index in indices)
+            {
+                var point = matrix.MultiplyPoint3x4(positions[index]);
+                min = Vector3.Min(min, point); max = Vector3.Max(max, point);
+            }
+            if (!MapOverlayGeometry.IsLargeFlat(min, max, plan.Source.Size.x, plan.Source.Size.z)) return true;
             var vertices = new List<(int a, int b, int c, Vector3 weights)>();
             for (int i = 0; i + 2 < indices.Length; i += 3)
             {

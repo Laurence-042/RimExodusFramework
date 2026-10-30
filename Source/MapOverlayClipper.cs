@@ -33,7 +33,8 @@ namespace RimExodus.Maps
             var span = new Vector3(Math.Abs(m.m00) * size.X + Math.Abs(m.m01) * size.Y + Math.Abs(m.m02) * size.Z,
                 Math.Abs(m.m10) * size.X + Math.Abs(m.m11) * size.Y + Math.Abs(m.m12) * size.Z,
                 Math.Abs(m.m20) * size.X + Math.Abs(m.m21) * size.Y + Math.Abs(m.m22) * size.Z);
-            if (bounds.IsEmpty || !MapOverlayGeometry.IsLargeFlat(Vector3.zero, span, plan.Source.Size.x, plan.Source.Size.z))
+            // Bounds may deliberately include vertical culling padding. Only referenced vertices establish planarity.
+            if (bounds.IsEmpty || !MapOverlayGeometry.HasLargeSpan(Vector3.zero, span, plan.Source.Size.x, plan.Source.Size.z))
                 return command;
             if (!ReferenceEquals(footprint, plan.OverlayFootprint)) { Dispose(); footprint = plan.OverlayFootprint; }
             var key = (command.Mesh, command.SubmeshIndex, command.Matrix);
@@ -75,18 +76,18 @@ namespace RimExodus.Maps
                 if (attr.Format != VertexAttributeFormat.Float32 && attr.Format != VertexAttributeFormat.UNorm8) return null;
             var positions = MeshArrays.GetPositions(source);
             var matrix = new MapDrawCommand(command).Matrix;
-            Vector3 min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue), max = -min;
-            foreach (var pos in positions)
-            {
-                var point = matrix.MultiplyPoint3x4(new Vector3(pos.X, pos.Y, pos.Z));
-                min = Vector3.Min(min, point); max = Vector3.Max(max, point);
-            }
-            if (!MapOverlayGeometry.IsLargeFlat(min, max, plan.Source.Size.x, plan.Source.Size.z)) return null;
-            var vertices = new List<(int a, int b, int c, Vector3 weights)>();
             int Index(int at) => source.IndexFormat == MeshIndexFormat.UInt16
                 ? MemoryMarshal.Read<ushort>(source.GetIndexBuffer().AsSpan().Slice(at * 2)) + sub.BaseVertex
                 : (int)MemoryMarshal.Read<uint>(source.GetIndexBuffer().AsSpan().Slice(at * 4)) + sub.BaseVertex;
             Vector3 Point(int at) { var p = positions[at]; return matrix.MultiplyPoint3x4(new Vector3(p.X, p.Y, p.Z)); }
+            Vector3 min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue), max = -min;
+            for (int i = sub.IndexStart; i < sub.IndexStart + sub.IndexCount; i++)
+            {
+                var point = Point(Index(i));
+                min = Vector3.Min(min, point); max = Vector3.Max(max, point);
+            }
+            if (!MapOverlayGeometry.IsLargeFlat(min, max, plan.Source.Size.x, plan.Source.Size.z)) return null;
+            var vertices = new List<(int a, int b, int c, Vector3 weights)>();
             for (int i = sub.IndexStart; i + 2 < sub.IndexStart + sub.IndexCount; i += 3)
             {
                 int a = Index(i), b = Index(i + 1), c = Index(i + 2);

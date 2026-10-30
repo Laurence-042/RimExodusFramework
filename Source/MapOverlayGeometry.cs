@@ -43,7 +43,9 @@ namespace RimExodus.Maps
             }
             return vertices;
         }
+        internal static bool HasLargeSpan(Vector3 min, Vector3 max, int mapWidth, int mapHeight) =>
+            max.x - min.x > mapWidth * 0.5f || max.z - min.z > mapHeight * 0.5f;
         internal static bool IsLargeFlat(Vector3 min, Vector3 max, int mapWidth, int mapHeight) =>
-            max.y - min.y < 0.01f && (max.x - min.x > mapWidth * 0.5f || max.z - min.z > mapHeight * 0.5f);
+            max.y - min.y < 0.01f && HasLargeSpan(min, max, mapWidth, mapHeight);
     }
 }

@@ -40,8 +40,9 @@ internal static class NativeRenderChecks
         var cpu = new CpuMeshData();
         cpu.SetVertexLayout(new VertexLayout(new[] {
             new VertexAttribute(VertexAttributeSemantic.Position, VertexAttributeFormat.Float32, 3, 0, 0),
-            new VertexAttribute(VertexAttributeSemantic.TexCoord0, VertexAttributeFormat.Float32, 2, 0, 12) }), 3);
-        float[] vertexData = { -10, 3, -10, 0, 0, 30, 3, -10, 1, 0, -10, 3, 30, 0, 1 };
+            new VertexAttribute(VertexAttributeSemantic.TexCoord0, VertexAttributeFormat.Float32, 2, 0, 12) }), 4);
+        // Unreferenced/off-plane vertices must not disqualify the selected planar submesh.
+        float[] vertexData = { -10, 3, -10, 0, 0, 30, 3, -10, 1, 0, -10, 3, 30, 0, 1, 0, 80, 0, 0, 0 };
         vertexData.CopyTo(MemoryMarshal.Cast<byte, float>(cpu.GetVertexStream(0).AsSpan()));
         cpu.SetIndexBufferParams(3, MeshIndexFormat.UInt32);
         var indices = MemoryMarshal.Cast<byte, uint>(cpu.GetIndexBuffer().AsSpan());
@@ -65,6 +66,22 @@ internal static class NativeRenderChecks
             Check(ReferenceEquals(clipper.Clip(draw, plan).Mesh, clipped.Mesh), "Unchanged mesh reuses clipped cache");
             mesh.MarkCpuStorageChanged();
             Check(!ReferenceEquals(clipper.Clip(draw, plan).Mesh, clipped.Mesh), "Mesh version change rebuilds clipping");
+            foreach (float padding in new[] { 1f, 10f, 200f })
+            {
+                clipper.Dispose(); // Exercise classification instead of a previous cached result.
+                mesh.Bounds = new MeshBounds(-10, 3 - padding / 2, -10, 30, 3 + padding / 2, 30);
+                var padded = clipper.Clip(draw, plan);
+                Check(padded.Mesh != null && padded.Mesh != mesh, "Padded culling bounds do not hide a planar overlay: " + padding);
+                Check(ReferenceEquals(clipper.Clip(draw, plan).Mesh, padded.Mesh), "Padded overlay uses normal geometry cache");
+            }
+            var sourceData = MemoryMarshal.Cast<byte, float>(cpu.GetVertexStream(0).AsSpan());
+            sourceData[1] = 8;
+            mesh.MarkCpuStorageChanged();
+            Check(ReferenceEquals(clipper.Clip(draw, plan).Mesh, mesh), "Actual non-planar geometry remains untouched with large bounds");
+            sourceData[1] = 3;
+            sourceData[5] = -9; sourceData[12] = -9;
+            mesh.MarkCpuStorageChanged();
+            Check(ReferenceEquals(clipper.Clip(draw, plan).Mesh, mesh), "Padded bounds cannot turn a small triangle into a large overlay");
         }
 
         int inherited = ShaderPropertyId.GetOrCreate("_RefTestInherited"), authored = ShaderPropertyId.GetOrCreate("_RefTestAuthored"),
