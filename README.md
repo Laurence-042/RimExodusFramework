@@ -42,11 +42,15 @@ Delta-V 已切换为唯一 REF 后端，保留船壳选择、宇宙运动、飞�
 ```powershell
 just build       # 1.7 Release
 just build 1.6   # 1.6 Release
+just release     # 构建并打包 1.7 正式版
+just release 1.6 # 构建并打包 1.6 正式版
 just test        # 1.7 离线回归
 just test-services # SDK 8+，版本无关的调度/生成协调检查
 ```
 
 输出为 `<游戏版本>/Assemblies/RimExodus.Maps.dll`，不提交构建产物。独立克隆可以直接构建；不要求 Delta-V 或 RimExodus 源码。若同级存在 RimExodus，测试会只读链接其 transpiler，额外检查补丁组合顺序。
+
+`just release` 将所选版本的 DLL、正式 `About.xml`、`LoadFolders.xml` 和许可证打包到仓库外的 `../RimExodusFramework.release`；正式元数据使用 `RimExodus.Framework`，只声明所选游戏版本。再次执行会替换该发布目录。发布包不含源码、文档、PDB 或游戏/Harmony 程序集。若设置了 `DOTNET_EXE`，发布构建使用指定 SDK；本机还可复用同级 Delta-V 的本地 .NET 10 SDK。
 
 Delta-V 与 RimExodus 的 `just build` 会先调用同级 REF 的 `just build`，成功后复制 DLL 到各消费方的 `References/REF/<版本>/` 作为编译输入，再构建消费方。运行时仍由独立 REF Mod 提供程序集。
 

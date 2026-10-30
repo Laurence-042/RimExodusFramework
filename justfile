@@ -7,6 +7,10 @@ default:
 build version="1.7":
     powershell.exe -NoProfile -File build/Build.ps1 -Version {{version}}
 
+# Build and package one game version outside the repository.
+release version="1.7":
+    powershell.exe -NoProfile -File build/Release.ps1 -Version {{version}}
+
 # CPU-only regression, with optional read-only sibling RimExodus composition checks.
 test:
     powershell.exe -NoProfile -File build/Build.ps1 -Version 1.7 -Test
