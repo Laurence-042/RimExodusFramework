@@ -35,22 +35,23 @@ Delta-V 已切换为唯一 REF 后端，保留船壳选择、宇宙运动、飞�
 
 需要 RimWorld 1.6 或 1.7 和 Harmony。将本目录作为独立 Mod 安装并启用，加载顺序为 Harmony → RimExodus Framework → Delta-V / RimExodus。REF 的 DLL 只在 REF 的版本化 `Assemblies` 目录加载；消费方不要再把它打包进自己的 `Assemblies`。
 
+开发目录的名称为 `RimExodus Framework (Dev)`、packageId 为 `RimExodus.Framework.dev`；RimExodus 与 Delta-V 的开发目录依赖该 ID。正式发布包名称不带 `(Dev)`，packageId 为 `RimExodus.Framework`，供两者正式发布包依赖。
+
 ## 构建
 
-需要 `just` 和对应 .NET SDK：1.7 使用 SDK 10；1.6 使用可构建 net48 的 SDK。Windows 构建入口使用系统自带的 `powershell.exe`（Windows PowerShell 5.1），无需另装 PowerShell 7。可用 `DOTNET_EXE` 指定 dotnet 可执行文件。本机引用默认位置见 [引用配置](build/RimWorldReferences.props)，可用 MSBuild 的 `RimWorldDir`、`HarmonyPath` 属性或同名环境变量覆盖。1.6 使用编译期 NuGet 引用，不分发游戏/Harmony 程序集。
+需要 `just` 和对应 .NET SDK：1.7 使用 SDK 10；1.6 使用可构建 net48 的 SDK。Windows 构建入口使用系统自带的 `powershell.exe`（Windows PowerShell 5.1），无需另装 PowerShell 7。可用 `DOTNET_EXE` 指定 dotnet 可执行文件。本机默认游戏目录为 `D:\SteamLibrary\steamapps\common\RimWorld_1.6`（1.6）与 `D:\SteamLibrary\steamapps\common\RimWorld`（1.7）；[引用配置](build/RimWorldReferences.props) 可用 `RimWorld16Dir`、`RimWorld17Dir` 或通用 `RimWorldDir` 及 `HarmonyPath` 属性/环境变量覆盖。1.6 使用编译期 NuGet 引用，不分发游戏/Harmony 程序集。
 
 ```powershell
 just build       # 1.7 Release
 just build 1.6   # 1.6 Release
-just release     # 构建并打包 1.7 正式版
-just release 1.6 # 构建并打包 1.6 正式版
+just release     # 同时构建并打包 1.6 与 1.7 正式版
 just test        # 1.7 离线回归
 just test-services # SDK 8+，版本无关的调度/生成协调检查
 ```
 
 输出为 `<游戏版本>/Assemblies/RimExodus.Maps.dll`，不提交构建产物。独立克隆可以直接构建；不要求 Delta-V 或 RimExodus 源码。若同级存在 RimExodus，测试会只读链接其 transpiler，额外检查补丁组合顺序。
 
-`just release` 将所选版本的 DLL、正式 `About.xml`、`LoadFolders.xml` 和许可证打包到仓库外的 `../RimExodusFramework.release`；正式元数据使用 `RimExodus.Framework`，只声明所选游戏版本。再次执行会替换该发布目录。发布包不含源码、文档、PDB 或游戏/Harmony 程序集。若设置了 `DOTNET_EXE`，发布构建使用指定 SDK；本机还可复用同级 Delta-V 的本地 .NET 10 SDK。
+`just release` 分别尝试构建 1.6 与 1.7；缺少某版构建环境时只复用未过时的已有 DLL，若 DLL 缺失或早于源码/构建脚本则警告并中止打包。成功后将两版 DLL、正式 `About.xml`、`LoadFolders.xml` 和许可证一起打包到仓库外的 `../RimExodusFramework.release`；正式元数据使用 `RimExodus.Framework`，同时声明 1.6 与 1.7。再次执行会替换该发布目录，并检查两套游戏 `Mods` 目录下的 `RimExodusFramework.release` 软链接，缺失时补建；若游戏目录不存在则警告。发布包不含源码、文档、PDB 或游戏/Harmony 程序集。若设置了 `DOTNET_EXE`，发布构建使用指定 SDK；本机还可复用同级 Delta-V 的本地 .NET 10 SDK。两套游戏的 `Mods` 目录分别软链接开发目录与正式目录，按所需组合启用。
 
 Delta-V 与 RimExodus 的 `just build` 会先调用同级 REF 的 `just build`，成功后复制 DLL 到各消费方的 `References/REF/<版本>/` 作为编译输入，再构建消费方。运行时仍由独立 REF Mod 提供程序集。
 
@@ -72,3 +73,5 @@ build/                  引用配置和构建入口
 scripts/MapCoreRegression/ 离线回归
 doc/                    契约、迁移记录与待完成事项
 ```
+
+创意工坊介绍文案（中英分离的 BBCode）见 [中文](doc/SteamWorkshop/SteamWorkshop介绍-中文.md) / [English](doc/SteamWorkshop/SteamWorkshop介绍-English.md)。
