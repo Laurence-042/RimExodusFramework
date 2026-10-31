@@ -38,15 +38,21 @@ $before.InnerText = 'RimExodus.DeltaV'
 if (($about.ModMetaData.supportedVersions.li -join ',') -ne '1.6,1.7') {
     throw 'Release metadata must support both 1.6 and 1.7.'
 }
+$publishedFileId = Join-Path $root 'About/PublishedFileId.txt'
+if (!(Test-Path -LiteralPath $publishedFileId)) {
+    throw 'Release aborted: About/PublishedFileId.txt is missing.'
+}
+if ([IO.File]::ReadAllText($publishedFileId).Trim() -notmatch '^[1-9][0-9]*$') {
+    throw 'Release aborted: About/PublishedFileId.txt must contain a numeric Workshop item ID.'
+}
 
 if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
 New-Item -ItemType Directory -Path (Join-Path $target 'About') -Force | Out-Null
 $about.Save((Join-Path $target 'About/About.xml'))
 
-foreach ($file in @('Preview.png', 'PublishedFileId.txt')) {
-    $source = Join-Path $root "About/$file"
-    if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination (Join-Path $target 'About') }
-}
+$preview = Join-Path $root 'About/Preview.png'
+if (Test-Path -LiteralPath $preview) { Copy-Item -LiteralPath $preview -Destination (Join-Path $target 'About') }
+Copy-Item -LiteralPath $publishedFileId -Destination (Join-Path $target 'About')
 foreach ($version in @('1.6', '1.7')) {
     $assemblyDir = Join-Path $target "$version/Assemblies"
     New-Item -ItemType Directory -Path $assemblyDir -Force | Out-Null

@@ -51,7 +51,7 @@ just test-services # SDK 8+，版本无关的调度/生成协调检查
 
 输出为 `<游戏版本>/Assemblies/RimExodus.Maps.dll`，不提交构建产物。独立克隆可以直接构建；不要求 Delta-V 或 RimExodus 源码。若同级存在 RimExodus，测试会只读链接其 transpiler，额外检查补丁组合顺序。
 
-`just release` 分别尝试构建 1.6 与 1.7；缺少某版构建环境时只复用未过时的已有 DLL，若 DLL 缺失或早于源码/构建脚本则警告并中止打包。成功后将两版 DLL、正式 `About.xml`、`LoadFolders.xml` 和许可证一起打包到仓库外的 `../RimExodusFramework.release`；正式元数据使用 `RimExodus.Framework`，同时声明 1.6 与 1.7。再次执行会替换该发布目录，并检查两套游戏 `Mods` 目录下的 `RimExodusFramework.release` 软链接，缺失时补建；若游戏目录不存在则警告。发布包不含源码、文档、PDB 或游戏/Harmony 程序集。若设置了 `DOTNET_EXE`，发布构建使用指定 SDK；本机还可复用同级 Delta-V 的本地 .NET 10 SDK。两套游戏的 `Mods` 目录分别软链接开发目录与正式目录，按所需组合启用。
+`just release` 分别尝试构建 1.6 与 1.7；缺少某版构建环境时只复用未过时的已有 DLL，若 DLL 缺失或早于源码/构建脚本则警告并中止打包。成功后将两版 DLL、正式 `About.xml`、`PublishedFileId.txt`、`LoadFolders.xml` 和许可证一起打包到仓库外的 `../RimExodusFramework.release`；正式元数据使用 `RimExodus.Framework`，同时声明 1.6 与 1.7。缺少创意工坊 ID 文件时中止打包；再次执行会替换该发布目录，并检查两套游戏 `Mods` 目录下的 `RimExodusFramework.release` 软链接，缺失时补建；若游戏目录不存在则警告。发布包不含源码、文档、PDB 或游戏/Harmony 程序集。若设置了 `DOTNET_EXE`，发布构建使用指定 SDK；本机还可复用同级 Delta-V 的本地 .NET 10 SDK。两套游戏的 `Mods` 目录分别软链接开发目录与正式目录，按所需组合启用。
 
 Delta-V 与 RimExodus 的 `just build` 会先调用同级 REF 的 `just build`，成功后复制 DLL 到各消费方的 `References/REF/<版本>/` 作为编译输入，再构建消费方。运行时仍由独立 REF Mod 提供程序集。
 
