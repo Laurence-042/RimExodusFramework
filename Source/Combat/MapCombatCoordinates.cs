@@ -37,9 +37,8 @@ namespace RimExodus.Maps
             entry.Lifetime = MapRuntime.Current.Combat.Track(VerbCaster(verb)?.Map, target, () => { entry.Map = null; });
             CastTargets.Add(verb, entry);
         }
-        internal static Map TargetMapForCastGate(Verb verb)
+        internal static Map TargetMapForCastGate(Map target, Verb verb)
         {
-            var target = verb.CurrentTarget.Thing?.Map;
             var source = VerbCaster(verb)?.Map;
             return target != null && source != null && source != target
                 && CastTargets.TryGetValue(verb, out var marked) && marked.Map == target
