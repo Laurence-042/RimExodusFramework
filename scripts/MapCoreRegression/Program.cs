@@ -35,6 +35,8 @@ NativeRenderChecks.Run();
 RenderViewCompatChecks.Run();
 SpatialChecks.Run();
 ArchiveReferenceChecks.Run();
+ArchiveCompressionChecks.Run();
+ArchiveContextChecks.Run();
 
 static class Checks
 {

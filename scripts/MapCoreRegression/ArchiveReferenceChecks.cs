@@ -10,6 +10,7 @@ static class ArchiveReferenceChecks
     static readonly List<string> messages = new();
     static bool Capture(string text) { messages.Add(text); return false; }
     static bool Skip() => false;
+    static bool Ideology(ref bool __result) { __result = true; return false; }
     static bool FixtureType(string typeName, ref Type __result)
     {
         if (typeName != typeof(References).FullName) return true;
@@ -18,15 +19,37 @@ static class ArchiveReferenceChecks
     static T Raw<T>() => (T)RuntimeHelpers.GetUninitializedObject(typeof(T));
     static void Set(object obj, string field, object value) => AccessTools.Field(obj.GetType(), field).SetValue(obj, value);
 
+    sealed class WorldHolder : WorldObject, IThingHolder
+    {
+        internal readonly ThingOwner<Thing> contents;
+        public WorldHolder() { contents = new ThingOwner<Thing>(this); }
+        public ThingOwner GetDirectlyHeldThings() => contents;
+        public void GetChildHolders(List<IThingHolder> result) { }
+    }
+
     public sealed class References : IExposable
     {
         public Battle battle;
         public LogEntry combat, play;
+        public Precept precept;
+        public DrugPolicy drug;
+        public FoodPolicy food;
+        public ApparelPolicy outfit;
+        public ReadingPolicy reading;
+        public Tale tale;
+        public Thing remoteItem;
         public void ExposeData()
         {
             Scribe_References.Look(ref battle, "battleActive");
             Scribe_References.Look(ref combat, "combatLogEntry");
             Scribe_References.Look(ref play, "playLogEntry");
+            Scribe_References.Look(ref precept, "sourcePrecept");
+            Scribe_References.Look(ref drug, "curAssignedDrugs");
+            Scribe_References.Look(ref food, "curRestriction");
+            Scribe_References.Look(ref outfit, "curOutfit");
+            Scribe_References.Look(ref reading, "curAssignment");
+            Scribe_References.Look(ref tale, "tale");
+            Scribe_References.Look(ref remoteItem, "remoteItem");
         }
     }
 
@@ -42,6 +65,8 @@ static class ArchiveReferenceChecks
         // This fixture has no enabled DLC or filesystem-backed game configuration.
         harmony.Patch(typeof(ModsConfig).TypeInitializer,
             prefix: new HarmonyMethod(typeof(ArchiveReferenceChecks), nameof(Skip)));
+        harmony.Patch(AccessTools.PropertyGetter(typeof(ModsConfig), nameof(ModsConfig.IdeologyActive)),
+            prefix: new HarmonyMethod(typeof(ArchiveReferenceChecks), nameof(Ideology)));
         // The fixture assembly is not a loaded Mod; only supply its wrapper type.
         harmony.Patch(AccessTools.Method(typeof(GenTypes), nameof(GenTypes.GetTypeInAnyAssembly)),
             prefix: new HarmonyMethod(typeof(ArchiveReferenceChecks), nameof(FixtureType)));
@@ -56,8 +81,14 @@ static class ArchiveReferenceChecks
             Set(game, "maps", new List<Map>()); Set(game, "worldInt", world);
             game.questManager = new QuestManager();
             game.battleLog = new BattleLog(); game.playLog = new PlayLog();
+            game.drugPolicyDatabase = Raw<DrugPolicyDatabase>(); Set(game.drugPolicyDatabase, "policies", new List<DrugPolicy>());
+            game.foodRestrictionDatabase = Raw<FoodRestrictionDatabase>(); Set(game.foodRestrictionDatabase, "foodRestrictions", new List<FoodPolicy>());
+            game.outfitDatabase = Raw<OutfitDatabase>(); Set(game.outfitDatabase, "outfits", new List<ApparelPolicy>());
+            game.readingPolicyDatabase = Raw<ReadingPolicyDatabase>(); Set(game.readingPolicyDatabase, "readingPolicies", new List<ReadingPolicy>());
+            game.taleManager = new TaleManager();
             world.factionManager = new FactionManager(); world.worldObjects = new WorldObjectsHolder();
             world.worldPawns = new WorldPawns(); world.pocketMaps = new List<PocketMapParent>();
+            world.ideoManager = new IdeoManager();
             Current.Game = game;
             var battle = new Battle(); Set(battle, "loadID", 24);
             var entry = Raw<BattleLogEntry_RangedFire>(); Set(entry, "logID", 25); Set(entry, "ticksAbs", 100);
@@ -65,9 +96,22 @@ static class ArchiveReferenceChecks
             battle.Entries.Add(entry); game.battleLog.Battles.Add(battle); game.playLog.AllEntries.Add(playEntry);
             var parent = Raw<PocketMapParent>(); parent.ID = 27; world.pocketMaps.Add(parent);
             var faction = Raw<Faction>(); faction.loadID = 28; world.factionManager.AllFactionsListForReading.Add(faction);
+            var ideo = new Ideo(); Set(ideo, "id", 29); world.ideoManager.IdeosListForReading.Add(ideo);
+            var precept = new Precept_ThingStyle(); Set(precept, "ID", 30); ideo.PreceptsListForReading.Add(precept);
+            var drug = new DrugPolicy { id = 31 }; game.drugPolicyDatabase.AllPolicies.Add(drug);
+            var food = new FoodPolicy { id = 32 }; game.foodRestrictionDatabase.AllFoodRestrictions.Add(food);
+            var outfit = new ApparelPolicy { id = 33 }; game.outfitDatabase.AllOutfits.Add(outfit);
+            var reading = new ReadingPolicy { id = 34 }; game.readingPolicyDatabase.AllReadingPolicies.Add(reading);
+            var tale = new Tale { id = 35 }; game.taleManager.AllTalesListForReading.Add(tale);
+            var holder = new WorldHolder { ID = 36 }; world.worldObjects.AllWorldObjects.Add(holder);
+            var remoteItem = new Thing { def = new ThingDef { defName = "HeldFixture", category = ThingCategory.Item }, thingIDNumber = 37 };
+            ((List<Thing>)AccessTools.Field(typeof(ThingOwner<Thing>), "innerList").GetValue(holder.contents)).Add(remoteItem);
             var refs = MapArchive.ExternalReferences(null).ToArray();
             Check(refs.Contains(battle) && refs.Contains(entry) && refs.Contains(playEntry)
                 && refs.Contains(parent) && refs.Contains(faction), "archive source includes global battle/play logs and parent/faction");
+            Check(new ILoadReferenceable[] { precept, drug, food, outfit, reading, tale }.All(refs.Contains),
+                "archive includes native style precepts, pawn policies and art tales");
+            Check(refs.Contains(remoteItem), "world-object held items are included in external references");
 
             messages.Clear();
             Scribe.saver.InitSaving(path, "archiveReferenceTest");
@@ -106,7 +150,8 @@ static class ArchiveReferenceChecks
                 messages.Clear();
             }
             Check(Scribe.mode == LoadSaveMode.Inactive, "reference registration leaves no active loader");
-            var referenceSet = new References { battle = battle, combat = entry, play = playEntry };
+            var referenceSet = new References { battle = battle, combat = entry, play = playEntry,
+                precept = precept, drug = drug, food = food, outfit = outfit, reading = reading, tale = tale, remoteItem = remoteItem };
             Scribe.saver.InitSaving(path, "archiveReferenceTest");
             Scribe_Deep.Look(ref referenceSet, "references");
             MapArchive.RegisterSavingExternalReferences(refs, Array.Empty<ILoadReferenceable>());
@@ -120,6 +165,11 @@ static class ArchiveReferenceChecks
                 Scribe.loader.FinalizeLoading();
                 Check(ReferenceEquals(restored.battle, battle) && ReferenceEquals(restored.combat, entry)
                     && ReferenceEquals(restored.play, playEntry), "Scribe cross-reference roundtrip retains external instances");
+                Check(ReferenceEquals(restored.precept, precept) && ReferenceEquals(restored.drug, drug)
+                    && ReferenceEquals(restored.food, food) && ReferenceEquals(restored.outfit, outfit)
+                    && ReferenceEquals(restored.reading, reading) && ReferenceEquals(restored.tale, tale),
+                    "Scribe roundtrip retains original style, policy and tale instances");
+                Check(ReferenceEquals(restored.remoteItem, remoteItem), "Scribe resolves a world-holder item to its current instance");
                 Check(messages.Count == 0, "Scribe roundtrip has no missing references: " + string.Join("\n", messages));
             }
             Console.WriteLine($"{count} archive reference checks passed (real 1.7 Scribe checker/directory; no map lifecycle).");

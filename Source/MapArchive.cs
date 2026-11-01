@@ -19,24 +19,34 @@ namespace RimExodus.Maps
     /// </summary>
     public static class MapArchive
     {
-        private static readonly FieldInfo GameMaps = AccessTools.Field(typeof(Game), "maps");
         private static readonly FieldInfo LoadedDirectory = AccessTools.Field(typeof(CrossRefHandler),
             "loadedObjectDirectory");
+
+        // FinalizeLoading runs native callbacks synchronously; do not overlap another
+        // Scribe lease or a suspended map generation/long-event initialization.
+        private static bool CanStartOperation => UnityData.IsInMainThread && ScribeOperation.IsAvailable
+            && MapGenerator.mapBeingGenerated == null && MapRuntime.Current?.Generation.IsBusy != true
+            && !LongEventHandler.AnyEventNowOrWaiting;
 
         public static bool TryCapture(Map map, out string data)
         {
             data = null;
-            if (map == null || map.Disposed || Scribe.mode != LoadSaveMode.Inactive) return false;
+            if (map == null || map.Disposed || !CanStartOperation || !Find.Maps.Contains(map)) return false;
             using var operation = new ScribeOperation();
             string path = Path.GetTempFileName();
+            MapFileCompressor previousCompressor = map.compressor;
             try
             {
                 var things = new List<Thing>();
                 ThingOwnerUtility.GetAllThingsRecursively(map, things);
                 ValidateCaptureIds(things);
                 Scribe.saver.InitSaving(path, "archivedMap");
+                ScribeMetaHeaderUtility.WriteMetaHeader();
+                HashSet<string> requiredIds = RequiredSavedThingIds(map);
                 Map current = map;
                 Scribe_Deep.Look(ref current, "map");
+                if (map.compressor != null)
+                    throw new InvalidDataException("Map serialization did not finish its compression context.");
                 RegisterSavingExternalReferences(ExternalReferences(map), things.Cast<ILoadReferenceable>().Append(map));
                 Scribe.saver.FinalizeSaving();
                 byte[] xml = File.ReadAllBytes(path);
@@ -45,10 +55,7 @@ namespace RimExodus.Maps
                 XmlNode mapNode = document.DocumentElement?["map"];
                 if (mapNode?["mapInfo"] == null || mapNode["things"] == null)
                     throw new InvalidDataException("Serialized map core nodes are missing.");
-                var serializedIds = SavedIds(document);
-                foreach (Thing thing in map.listerThings.AllThings)
-                    if (thing.def.isSaveable && !thing.IsSaveCompressible() && !serializedIds.Contains(thing.ThingID))
-                        throw new InvalidDataException($"Map serialization lost {thing.ThingID}.");
+                ValidateSavedThingIds(document, requiredIds);
                 using var output = new MemoryStream();
                 using (var gzip = new GZipStream(output, CompressionLevel.Optimal, true))
                     gzip.Write(xml, 0, xml.Length);
@@ -61,7 +68,7 @@ namespace RimExodus.Maps
                 Scribe.ForceStop();
                 return false;
             }
-            finally { File.Delete(path); }
+            finally { map.compressor = previousCompressor; File.Delete(path); }
         }
 
         public static bool CanUnloadLosslessly(Map map)
@@ -81,7 +88,8 @@ namespace RimExodus.Maps
 
         public static bool TryUnload(Map map, bool preserveExternalEvents = true)
         {
-            if (map == null || map.Disposed || GameMaps?.GetValue(Current.Game) is not List<Map> maps)
+            if (map == null || map.Disposed || (preserveExternalEvents && !CanStartOperation)
+                || Current.Game?.Maps is not List<Map> maps)
                 return false;
             int index = maps.IndexOf(map);
             if (index < 0 || map == Find.CurrentMap) return false;
@@ -136,7 +144,7 @@ namespace RimExodus.Maps
             Cleanup(() => Find.Scenario.MapRemoved(map));
             Cleanup(map.Dispose);
             Cleanup(() => Find.ColonistBar.MarkColonistsDirty());
-            MapRuntime.Current?.Forget(map);
+            Cleanup(() => MapRuntime.Current?.Forget(map));
             return true;
         }
 
@@ -144,12 +152,13 @@ namespace RimExodus.Maps
             MapParent expectedParent, out Map map)
         {
             map = null;
-            if (data.NullOrEmpty() || Scribe.mode != LoadSaveMode.Inactive) return false;
-            if (expectedParent == null || Find.Maps.Any(m => m.uniqueID == expectedMapId || m.Parent == expectedParent)) return false;
+            if (data.NullOrEmpty() || !CanStartOperation) return false;
+            if (expectedParent == null || Find.Maps.Count > sbyte.MaxValue
+                || Find.Maps.Any(m => m.uniqueID == expectedMapId || m.Parent == expectedParent)) return false;
             string path = Path.GetTempFileName();
             Map loaded = null;
-            bool added = false;
             using var loading = new ScribeOperation(loading: true);
+            using var metadata = new ArchiveMetadataScope();
             try
             {
                 byte[] compressed = Convert.FromBase64String(data);
@@ -158,8 +167,11 @@ namespace RimExodus.Maps
                 var document = new XmlDocument();
                 document.Load(path);
                 Scribe.loader.InitLoading(path);
+                metadata.Load();
                 Scribe_Deep.Look(ref loaded, "map");
                 if (loaded == null) throw new InvalidDataException("Archive contains no map.");
+                if (loaded.uniqueID != expectedMapId)
+                    throw new InvalidDataException("Restored map ID differs from archive identity.");
                 // Scribe catches nested constructor errors and can return a partial Pawn.
                 // Verify saved needs before publishing the map or discarding its archive.
                 ValidateRestoredPawnNeeds(document, Scribe.loader.crossRefs.crossReferencingExposables.OfType<Pawn>());
@@ -167,11 +179,12 @@ namespace RimExodus.Maps
                     .OfType<ILoadReferenceable>().Where(CanRegisterExternalReference).Select(t => t.GetUniqueLoadID()));
                 RegisterExternalReferences(loaded, loadedIds);
                 Current.Game.AddMap(loaded);
-                added = true;
+                if (!Find.Maps.Contains(loaded)) throw new InvalidOperationException("Restored map was not registered in Game.maps.");
                 Scribe.loader.FinalizeLoading();
                 if (loaded.uniqueID != expectedMapId || loaded.Parent != expectedParent)
                     throw new InvalidDataException("Restored map identity or pocket parent differs from archive.");
                 loaded.FinalizeLoading();
+                loaded.Parent.FinalizeLoading();
                 var restoredIds = new HashSet<string>(loaded.listerThings.AllThings.Select(t => t.ThingID));
                 if (SavedIds(document).Any(id => !restoredIds.Contains(id)))
                     throw new InvalidDataException("Map loading failed to spawn one or more persistent Things.");
@@ -181,33 +194,29 @@ namespace RimExodus.Maps
             catch (Exception ex)
             {
                 Log.Error($"[RimExodus.Maps] Full map archive restore failed: {ex}");
+                // SaveableFromNode registers the new Map before ExposeData, but returns
+                // null if that call throws. Recover it before ForceStop clears the list.
+                loaded ??= Scribe.loader.crossRefs.crossReferencingExposables.OfType<Map>().FirstOrDefault();
                 Scribe.ForceStop();
-                if (added)
+                // AddMap can throw from a notification after it has already inserted
+                // the map. Actual registration, not method return, decides rollback.
+                if (loaded != null && Find.Maps.Contains(loaded))
                 {
                     // FinalizeLoading 可能已生成部分 Thing/Region；复用唯一卸图入口清理索引。
                     if (TryUnload(loaded, preserveExternalEvents: false))
-                    {
-                        try { MapRuntime.Current?.Forget(loaded); }
-                        catch (Exception cleanupError)
-                        { Log.Error($"[RimExodus.Maps] Partial map restore runtime cleanup failed: {cleanupError}"); }
-                        finally { loaded.spawnedThings.Clear(); }
-                    }
+                        loaded.spawnedThings.Clear();
                     else
                         Log.Error($"[RimExodus.Maps] Failed to remove partially restored map {loaded?.uniqueID.ToString()}");
                 }
-                else loaded?.Dispose();
+                else if (loaded != null)
+                {
+                    try { loaded.Dispose(); }
+                    catch (Exception cleanupError)
+                    { Log.Error($"[RimExodus.Maps] Partial map construction cleanup failed: {cleanupError}"); }
+                }
                 return false;
             }
             finally { File.Delete(path); }
-        }
-
-        internal readonly struct MapLoadingScope : IDisposable
-        {
-            private readonly ProgramState previous;
-            // Same loading context as Game.LoadGame; synchronous, never spans frames.
-            internal MapLoadingScope(ProgramState previous)
-            { this.previous = previous; Current.ProgramState = ProgramState.MapInitializing; }
-            public void Dispose() => Current.ProgramState = previous;
         }
 
         internal static void ValidateCaptureIds(IEnumerable<Thing> things)
@@ -224,6 +233,30 @@ namespace RimExodus.Maps
                     throw new InvalidDataException($"Cannot archive duplicate Thing ID {thing.thingIDNumber}: {previous.def.defName}, {thing.def.defName}.");
                 seen[thing.thingIDNumber] = thing;
             }
+        }
+
+        internal static HashSet<string> RequiredSavedThingIds(Map map)
+        {
+            // Map.ExposeData clears its compressor before returning. Snapshot the full-save
+            // requirements while vanilla's reference-aware compression context is available.
+            MapFileCompressor previous = map.compressor;
+            try
+            {
+                map.compressor = new MapFileCompressor(map)
+                { compressibilityDecider = new CompressibilityDecider(map) };
+                map.compressor.compressibilityDecider.DetermineReferences();
+                return new HashSet<string>(map.listerThings.AllThings
+                    .Where(t => t.def.isSaveable && !t.IsSaveCompressible()).Select(t => t.ThingID));
+            }
+            finally { map.compressor = previous; }
+        }
+
+        internal static void ValidateSavedThingIds(XmlDocument document, IEnumerable<string> requiredIds)
+        {
+            HashSet<string> serializedIds = SavedIds(document);
+            foreach (string id in requiredIds)
+                if (!serializedIds.Contains(id))
+                    throw new InvalidDataException($"Map serialization lost {id}.");
         }
 
         internal static void ValidateRestoredPawnNeeds(XmlDocument document, IEnumerable<Pawn> loadedPawns)
@@ -276,20 +309,43 @@ namespace RimExodus.Maps
 
         internal static IEnumerable<ILoadReferenceable> ExternalReferences(Map restoringMap)
         {
+            var things = new List<Thing>();
             foreach (Faction faction in Find.FactionManager.AllFactionsListForReading) yield return faction;
             if (ModsConfig.IdeologyActive && Find.IdeoManager != null)
-                foreach (Ideo ideo in Find.IdeoManager.IdeosListForReading) yield return ideo;
+                foreach (Ideo ideo in Find.IdeoManager.IdeosListForReading)
+                {
+                    yield return ideo;
+                    foreach (Precept precept in ideo.PreceptsListForReading) yield return precept;
+                }
+            foreach (DrugPolicy policy in Current.Game.drugPolicyDatabase.AllPolicies) yield return policy;
+            foreach (FoodPolicy policy in Current.Game.foodRestrictionDatabase.AllFoodRestrictions) yield return policy;
+            foreach (ApparelPolicy policy in Current.Game.outfitDatabase.AllOutfits) yield return policy;
+            foreach (ReadingPolicy policy in Current.Game.readingPolicyDatabase.AllReadingPolicies) yield return policy;
+            foreach (Tale tale in Find.TaleManager.AllTalesListForReading) yield return tale;
             foreach (Quest quest in Find.QuestManager.QuestsListForReading) yield return quest;
-            foreach (WorldObject obj in Find.WorldObjects.AllWorldObjects) yield return obj;
+            foreach (WorldObject obj in Find.WorldObjects.AllWorldObjects)
+            {
+                yield return obj;
+                // MapParent contents are handled by the map loop, excluding the source.
+                if (obj is IThingHolder holder && !(obj is MapParent))
+                {
+                    ThingOwnerUtility.GetAllThingsRecursively(holder, things);
+                    foreach (Thing thing in things) yield return thing;
+                }
+            }
             foreach (PocketMapParent parent in Find.World.pocketMaps) yield return parent;
-            foreach (Pawn pawn in Find.WorldPawns.AllPawnsAliveOrDead) yield return pawn;
+            foreach (Pawn pawn in Find.WorldPawns.AllPawnsAliveOrDead)
+            {
+                yield return pawn;
+                ThingOwnerUtility.GetAllThingsRecursively(pawn, things);
+                foreach (Thing thing in things) yield return thing;
+            }
             foreach (Battle battle in Find.BattleLog.Battles)
             {
                 yield return battle;
                 foreach (LogEntry entry in battle.Entries) yield return entry;
             }
             foreach (LogEntry entry in Find.PlayLog.AllEntries) yield return entry;
-            var things = new List<Thing>();
             foreach (Map other in Find.Maps)
             {
                 if (other == restoringMap) continue;

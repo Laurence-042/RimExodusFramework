@@ -7,10 +7,11 @@ namespace RimExodus.Maps
     internal sealed class ScribeOperation : IDisposable
     {
         [ThreadStatic] private static bool entered;
+        internal static bool IsAvailable => !entered && Scribe.mode == LoadSaveMode.Inactive;
         private readonly ProgramState previous;
         public ScribeOperation(bool loading = false)
         {
-            if (entered || Scribe.mode != LoadSaveMode.Inactive)
+            if (!IsAvailable)
                 throw new InvalidOperationException("A Scribe operation is already active.");
             entered = true;
             previous = Current.ProgramState;
