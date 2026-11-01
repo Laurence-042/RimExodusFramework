@@ -1,3 +1,13 @@
+1.0.2
+- 修复：整图归档时可能出现压缩器缺失报错；恢复时使用归档自身的版本信息，避免受此前加载文件影响。
+  Fixed: full-map archiving could report a missing compressor. Restoration now uses the archive's own version information instead of metadata left by a previously loaded file.
+- 修复：整图恢复时可能丢失建筑风格来源、角色政策、艺术品故事及世界容器内容的引用。
+  Fixed: full-map restoration could lose references to building style sources, pawn policies, art tales, and contents held by world objects.
+- 修复：补齐地图恢复收尾和失败清理，避免存读档重入或地图生成期间启动归档操作。
+  Fixed: completed map restoration finalization and failure cleanup, and prevented archive operations from overlapping save/load operations or map generation.
+- 开发快照说明：没有版本头的旧整图归档不再恢复；测试请使用新档或重新生成归档。
+  Development snapshot note: old full-map archives without a version header are no longer restored. Use a new game or newly captured archives for testing.
+
 1.0.1
 - 修复：与 Vehicle Map Framework 同时使用时，地面角色向载具内部目标射击可能会立即取消；现在可以正常开火
   Fixed: with Vehicle Map Framework installed, a pawn on the ground could have their shot at a target inside a vehicle cancelled immediately. They can now fire normally.
