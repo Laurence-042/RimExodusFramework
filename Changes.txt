@@ -1,3 +1,9 @@
+1.0.3
+- 新增：区域 prefab 保存并恢复室内温度与真空度，支持旋转；局部导入按格数与目标房间现有环境混合，露天和破口沿用原版规则。
+  Added: region prefabs preserve indoor temperature and vacuum through rotation and reconstruction. Partial imports mix with the destination room by cell count; outdoor and breached rooms follow vanilla rules.
+- 验证：两版构建与环境专项离线回归通过，Delta-V 教程已改为读取 prefab 环境设置，用户实测通过。
+  Validation: builds for both supported versions and offline environment regression checks passed. Delta-V tutorials now read environment settings from prefabs, with in-game testing confirmed by the user.
+
 1.0.2
 - 修复：整图归档时可能出现压缩器缺失报错；恢复时使用归档自身的版本信息，避免受此前加载文件影响。
   Fixed: full-map archiving could report a missing compressor. Restoration now uses the archive's own version information instead of metadata left by a previously loaded file.

@@ -46,6 +46,7 @@ namespace RimExodus.Maps
         public List<PrefabTerrainData> terrain = new List<PrefabTerrainData>();
         public List<PrefabFoundationEntry> foundations = new List<PrefabFoundationEntry>();
         public List<PrefabRoofEntry> roofs = new List<PrefabRoofEntry>();
+        public List<PrefabEnvironmentEntry> environment = new List<PrefabEnvironmentEntry>();
 
         private static readonly FieldInfo PrefabThingsField =
             typeof(PrefabDef).GetField("things", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -156,6 +157,9 @@ namespace RimExodus.Maps
             if (root["mask"] != null)
                 foreach (XmlNode cell in root["mask"].ChildNodes)
                     if (cell.Name == "li") doc.mask.Add(ParseHelper.FromString<IntVec3>(cell.InnerText));
+            if (root["environment"] != null)
+                doc.environment = DirectXmlToObject.ObjectFromXml<List<PrefabEnvironmentEntry>>(root["environment"], doPostLoad: false);
+            MapPrefabEnvironment.Validate(doc);
             foreach (XmlNode child in statesNode.ChildNodes)
             {
                 if (child is not XmlElement node || node.Name != "li") continue;
@@ -213,6 +217,7 @@ namespace RimExodus.Maps
 
         public string ToXml()
         {
+            MapPrefabEnvironment.Validate(this);
             var text = new StringBuilder();
             var settings = new XmlWriterSettings
             {
@@ -302,6 +307,18 @@ namespace RimExodus.Maps
                     }
                     writer.WriteEndElement();
                 }
+                writer.WriteStartElement("environment");
+                foreach (PrefabEnvironmentEntry entry in environment)
+                {
+                    writer.WriteStartElement("li");
+                    writer.WriteElementString("temperature", entry.temperature.ToString("R", CultureInfo.InvariantCulture));
+                    writer.WriteElementString("vacuum", entry.vacuum.ToString("R", CultureInfo.InvariantCulture));
+                    writer.WriteStartElement("cells");
+                    foreach (IntVec3 cell in entry.cells) writer.WriteElementString("li", cell.ToString());
+                    writer.WriteEndElement();
+                    writer.WriteEndElement();
+                }
+                writer.WriteEndElement();
                 writer.WriteEndElement();
             }
             return text.ToString();

@@ -81,6 +81,7 @@ namespace RimExodus.Maps
                 RoofDef roof = map.roofGrid.RoofAt(cell);
                 if (roof != null) doc.roofs.Add(new PrefabRoofEntry { pos = local, def = roof });
             }
+            MapPrefabEnvironment.Capture(doc, map, cells);
             return doc;
         }
 
@@ -103,6 +104,12 @@ namespace RimExodus.Maps
             Rot4 rotation = PrefabUtility.ValidateRotation(terrain, rot);
             IntVec3 root = PrefabUtility.GetRoot(terrain, position, rotation);
             // Validate every footprint and decode every instance before touching the destination.
+            try { MapPrefabEnvironment.Validate(doc); }
+            catch (InvalidDataException error) { result.Errors.Add(error.Message); return result; }
+            foreach (var entry in doc.environment)
+                foreach (IntVec3 cell in entry.cells)
+                    if (!(root + PrefabUtility.GetAdjustedLocalPosition(cell, rotation)).InBounds(map))
+                        result.Errors.Add("Environment extends outside the destination map.");
             foreach (IntVec3 cell in doc.mask)
                 if (!(root + PrefabUtility.GetAdjustedLocalPosition(cell, rotation)).InBounds(map))
                     result.Errors.Add("Selected region extends outside the destination map.");
@@ -177,6 +184,11 @@ namespace RimExodus.Maps
             {
                 IntVec3 cell = root + PrefabUtility.GetAdjustedLocalPosition(entry.pos, rotation);
                 if (options.ProtectCell?.Invoke(map, cell) != true) map.roofGrid.SetRoof(cell, entry.def);
+            }
+            if (result.Success)
+            {
+                try { MapPrefabEnvironment.Apply(doc, map, root, rotation, options.ProtectCell); }
+                catch (Exception error) { result.Errors.Add($"Environment restoration failed: {error}"); }
             }
             if (result.Success) options.Completed?.Invoke(map, result.Things, root, rotation);
             return result;

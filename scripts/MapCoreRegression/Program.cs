@@ -37,6 +37,7 @@ SpatialChecks.Run();
 ArchiveReferenceChecks.Run();
 ArchiveCompressionChecks.Run();
 ArchiveContextChecks.Run();
+PrefabEnvironmentChecks.Run();
 
 static class Checks
 {
