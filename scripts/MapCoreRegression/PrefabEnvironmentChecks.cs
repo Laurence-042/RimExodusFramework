@@ -14,6 +14,7 @@ static class PrefabEnvironmentChecks
     static readonly BiomeDef biome = new() { inVacuum = true };
     static bool Biome(ref BiomeDef __result) { __result = biome; return false; }
     static bool Quiet(ref bool __result) { __result = false; return false; }
+    static bool SkipAreaNotifications() => false;
 
     internal static void Run()
     {
@@ -27,6 +28,7 @@ static class PrefabEnvironmentChecks
             Check(rejected, label);
         }
         var oldGame = Current.Game;
+        var oldGeneratingMap = MapGenerator.mapBeingGenerated;
         var oldCulture = CultureInfo.CurrentCulture;
         bool oldProfiler = DeepProfiler.enabled;
         DeepProfiler.enabled = false;
@@ -35,6 +37,10 @@ static class PrefabEnvironmentChecks
             prefix: new HarmonyMethod(typeof(PrefabEnvironmentChecks), nameof(Biome)));
         harmony.Patch(AccessTools.PropertyGetter(typeof(Prefs), nameof(Prefs.LogVerbose)),
             prefix: new HarmonyMethod(typeof(PrefabEnvironmentChecks), nameof(Quiet)));
+        // Native Area setters still write their real BoolGrid. Drawing/pathfinder
+        // notifications require a live map and are outside this content fixture.
+        harmony.Patch(AccessTools.Method(typeof(Area), "MarkDirty"),
+            prefix: new HarmonyMethod(typeof(PrefabEnvironmentChecks), nameof(SkipAreaNotifications)));
         try
         {
             var game = Raw<Game>();
@@ -127,7 +133,50 @@ static class PrefabEnvironmentChecks
             map.regionAndRoomUpdater.Enabled = false;
             MapPrefabEnvironment.Apply(doc, map, origin, Rot4.North, null);
             Check(!map.regionAndRoomUpdater.Enabled, "generation updater enabled flag restored");
+            bool enabledAtCompletion = false;
+            var disabledResult = MapPrefabs.Rebuild(doc, map, C(20,20), Rot4.North,
+                new PrefabPlacement { Completed = (_, _, _, _) => enabledAtCompletion = map.regionAndRoomUpdater.Enabled });
+            Check(disabledResult.Success && enabledAtCompletion && !map.regionAndRoomUpdater.Enabled,
+                "public prefab placement enables rooms through completion and restores generation flag");
             map.regionAndRoomUpdater.Enabled = true;
+            // Generation destroys Room identities after prefab restoration. Capture
+            // current values, then replace the topology with native-default rooms.
+            var generation = new PrefabGenerationEnvironment();
+            Check(generation.CaptureBeforeRebuild(map) == null, "ordinary maps have no generation intervention");
+            generation.Track(map);
+            a.Temperature = 18.5f; a.Vacuum = .125f;
+            b.Temperature = 15f; b.Vacuum = 0f;
+            var snapshot = generation.CaptureBeforeRebuild(map);
+            a = RoomAt(-100, 1, C(4,4), C(5,4));
+            b = RoomAt(-100, 1, C(4,6));
+            PrefabGenerationEnvironment.RestoreAfterRebuild(map, snapshot);
+            Near(a.Temperature, 18.5f, "fresh room retains pre-rebuild temperature, not authored defaults");
+            Near(a.Vacuum, .125f, "fresh room retains actual vacuum");
+            Near(b.Temperature, 15f, "separate equipment room retains its own environment");
+            Near(b.Vacuum, 0f, "sealed room remains pressurized after identity replacement");
+            Near(outside.Vacuum, 1f, "generation preservation does not pressurize exterior");
+            a.Temperature = 24;
+            snapshot = generation.CaptureBeforeRebuild(map);
+            a = RoomAt(-100, 1, C(4,4), C(5,4));
+            PrefabGenerationEnvironment.RestoreAfterRebuild(map, snapshot);
+            Near(a.Temperature, 24, "repeated full rebuild uses latest live state");
+            generation.Forget(map);
+            Check(generation.CaptureBeforeRebuild(map) == null, "generation completion/deletion releases pending map");
+            var runtime = new MapRuntime(game);
+            Set(game, "components", new List<GameComponent> { runtime });
+            MapGenerator.mapBeingGenerated = map;
+            Check(MapPrefabs.Rebuild(doc, map, C(20,20), Rot4.North, new PrefabPlacement()).Success,
+                "production prefab succeeds during generation");
+            Check(runtime.PrefabEnvironment.CaptureBeforeRebuild(map) != null,
+                "production rebuild tracks generating map automatically");
+            runtime.Forget(map);
+            Check(runtime.PrefabEnvironment.CaptureBeforeRebuild(map) == null,
+                "runtime map removal clears pending preservation");
+            MapGenerator.mapBeingGenerated = null;
+            Check(MapPrefabs.Rebuild(doc, map, C(20,20), Rot4.North, new PrefabPlacement()).Success,
+                "production import succeeds on existing map");
+            Check(runtime.PrefabEnvironment.CaptureBeforeRebuild(map) == null,
+                "ordinary prefab import does not leave generation work");
             Reject(() => MapPrefabDocument.FromXml(xml.Replace("<temperature>-12.5</temperature>", "<temperature>NaN</temperature>")), "NaN rejected");
             Reject(() => MapPrefabDocument.FromXml(xml.Replace("<vacuum>0.25</vacuum>", "<vacuum>2</vacuum>")), "invalid vacuum rejected");
             Reject(() => MapPrefabDocument.FromXml(xml.Replace("<vacuum>0.25</vacuum>", "")), "missing vacuum rejected");
@@ -140,11 +189,44 @@ static class PrefabEnvironmentChecks
             var invalid = doc.environment[0].vacuum; doc.environment[0].vacuum = float.PositiveInfinity;
             Check(!MapPrefabs.Rebuild(doc, map, C(20,20), Rot4.North, new PrefabPlacement()).Success, "programmatic invalid document rejected");
             doc.environment[0].vacuum = invalid;
+            map.areaManager = new AreaManager(map);
+            foreach (Area area in new Area[] { Raw<Area_NoRoof>(), Raw<Area_BuildRoof>() })
+            {
+                area.areaManager = map.areaManager; Set(area, "innerGrid", new BoolGrid(map));
+                map.areaManager.AllAreas.Add(area);
+            }
+            var roofDoc = new MapPrefabDocument { size = new IntVec2(5, 5), noRoof = new List<IntVec3> { C(1,2) } };
+            roofDoc = MapPrefabDocument.FromXml(roofDoc.ToXml());
+            Check(roofDoc.noRoof.SequenceEqual(new[] { C(1,2) }), "no-roof XML roundtrip");
+            for (int turn = 0; turn < 4; turn++)
+            {
+                Rot4 rotation = new(turn);
+                IntVec3 position = C(25,25), root = PrefabUtility.GetRoot(roofDoc.BuildPrefabDef(), position, rotation);
+                IntVec3 cell = root + PrefabUtility.GetAdjustedLocalPosition(roofDoc.noRoof[0], rotation);
+                map.areaManager.BuildRoof[cell] = true; map.areaManager.NoRoof[cell] = false;
+                var blocked = MapPrefabs.Rebuild(roofDoc, map, position, rotation,
+                    new PrefabPlacement { ProtectCell = (_, c) => c == cell });
+                Check(blocked.Success && map.areaManager.BuildRoof[cell] && !map.areaManager.NoRoof[cell],
+                    "protected roof area unchanged at rotation " + turn);
+                Check(MapPrefabs.Rebuild(roofDoc, map, position, rotation, new PrefabPlacement()).Success,
+                    "native roof area placement at rotation " + turn);
+                Check(map.areaManager.NoRoof[cell] && !map.areaManager.BuildRoof[cell],
+                    "native no-roof area suppresses build roof at rotation " + turn);
+                var captured = MapPrefabs.Capture(map, new CellSelection(new[] { cell }), "roof area");
+                Check(captured.noRoof.SequenceEqual(new[] { IntVec3.Zero }), "capture native roof area as local cell");
+            }
+            roofDoc.noRoof.Add(C(1,2)); Reject(() => roofDoc.ToXml(), "duplicate roof area rejected");
+            roofDoc.noRoof.RemoveAt(1);
+            roofDoc.noRoof.Add(C(5,2)); Reject(() => roofDoc.ToXml(), "roof area outside document rejected");
+            roofDoc.noRoof.RemoveAt(1);
+            Check(!MapPrefabs.Rebuild(roofDoc, map, C(0,0), Rot4.North, new PrefabPlacement()).Success,
+                "roof area outside destination rejected before mutation");
             Console.WriteLine($"{count} prefab environment checks passed (native Room/cell/XML, preassembled topology).");
         }
         finally
         {
             Current.Game = oldGame; CultureInfo.CurrentCulture = oldCulture;
+            MapGenerator.mapBeingGenerated = oldGeneratingMap;
             DeepProfiler.enabled = oldProfiler;
             harmony.UnpatchAll(harmony.Id);
         }

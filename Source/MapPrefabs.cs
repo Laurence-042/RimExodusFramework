@@ -80,12 +80,28 @@ namespace RimExodus.Maps
                 if (foundation != null) doc.foundations.Add(new PrefabFoundationEntry { pos = local, def = foundation });
                 RoofDef roof = map.roofGrid.RoofAt(cell);
                 if (roof != null) doc.roofs.Add(new PrefabRoofEntry { pos = local, def = roof });
+                if (map.areaManager?.NoRoof?[cell] == true) doc.noRoof.Add(local);
             }
             MapPrefabEnvironment.Capture(doc, map, cells);
             return doc;
         }
 
         public static PrefabPlacementResult Rebuild(MapPrefabDocument doc, Map map, IntVec3 position, Rot4 rot,
+            PrefabPlacement options)
+        {
+            if (map == null || map.Disposed) return RebuildContent(doc, map, position, rot, options);
+            // Native oxygen pumps query their Room in SpawnSetup, before the
+            // environment layer is applied. Generation may have disabled regions.
+            bool enabled = map.regionAndRoomUpdater.Enabled;
+            try
+            {
+                map.regionAndRoomUpdater.Enabled = true;
+                return RebuildContent(doc, map, position, rot, options);
+            }
+            finally { map.regionAndRoomUpdater.Enabled = enabled; }
+        }
+
+        private static PrefabPlacementResult RebuildContent(MapPrefabDocument doc, Map map, IntVec3 position, Rot4 rot,
             PrefabPlacement options)
         {
             var result = new PrefabPlacementResult();
@@ -104,7 +120,7 @@ namespace RimExodus.Maps
             Rot4 rotation = PrefabUtility.ValidateRotation(terrain, rot);
             IntVec3 root = PrefabUtility.GetRoot(terrain, position, rotation);
             // Validate every footprint and decode every instance before touching the destination.
-            try { MapPrefabEnvironment.Validate(doc); }
+            try { MapPrefabEnvironment.Validate(doc); doc.ValidateNoRoof(); }
             catch (InvalidDataException error) { result.Errors.Add(error.Message); return result; }
             foreach (var entry in doc.environment)
                 foreach (IntVec3 cell in entry.cells)
@@ -113,6 +129,9 @@ namespace RimExodus.Maps
             foreach (IntVec3 cell in doc.mask)
                 if (!(root + PrefabUtility.GetAdjustedLocalPosition(cell, rotation)).InBounds(map))
                     result.Errors.Add("Selected region extends outside the destination map.");
+            foreach (IntVec3 cell in doc.noRoof)
+                if (!(root + PrefabUtility.GetAdjustedLocalPosition(cell, rotation)).InBounds(map))
+                    result.Errors.Add("No-roof area extends outside the destination map.");
             foreach (var (_, local) in terrain.GetTerrain())
                 if (!(root + PrefabUtility.GetAdjustedLocalPosition(local, rotation)).InBounds(map))
                     result.Errors.Add("Terrain extends outside the destination map.");
@@ -136,6 +155,15 @@ namespace RimExodus.Maps
             List<Thing> loaded;
             try { loaded = MapPrefabThingState.Instantiate(doc.thingEntries, doc.name, options.Faction, options.Clone, options.PreserveFactions); }
             catch (Exception error) { result.Errors.Add(error.ToString()); return result; }
+            // Use native area state before any SpawnSetup can queue automatic roofing.
+            // Existing roofs remain physical content; NoRoof schedules native removal.
+            foreach (IntVec3 local in doc.noRoof)
+            {
+                IntVec3 cell = root + PrefabUtility.GetAdjustedLocalPosition(local, rotation);
+                if (options.ProtectCell?.Invoke(map, cell) == true) continue;
+                map.areaManager.BuildRoof[cell] = false;
+                map.areaManager.NoRoof[cell] = true;
+            }
             IntVec3 first = IntVec3.Invalid;
             foreach (PrefabFoundationEntry entry in doc.foundations)
             {
@@ -187,7 +215,12 @@ namespace RimExodus.Maps
             }
             if (result.Success)
             {
-                try { MapPrefabEnvironment.Apply(doc, map, root, rotation, options.ProtectCell); }
+                try
+                {
+                    MapPrefabEnvironment.Apply(doc, map, root, rotation, options.ProtectCell);
+                    if (doc.environment.Count > 0 && MapGenerator.mapBeingGenerated == map)
+                        MapRuntime.Current?.PrefabEnvironment.Track(map);
+                }
                 catch (Exception error) { result.Errors.Add($"Environment restoration failed: {error}"); }
             }
             if (result.Success) options.Completed?.Invoke(map, result.Things, root, rotation);

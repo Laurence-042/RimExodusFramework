@@ -46,6 +46,7 @@ namespace RimExodus.Maps
         public List<PrefabTerrainData> terrain = new List<PrefabTerrainData>();
         public List<PrefabFoundationEntry> foundations = new List<PrefabFoundationEntry>();
         public List<PrefabRoofEntry> roofs = new List<PrefabRoofEntry>();
+        public List<IntVec3> noRoof = new List<IntVec3>();
         public List<PrefabEnvironmentEntry> environment = new List<PrefabEnvironmentEntry>();
 
         private static readonly FieldInfo PrefabThingsField =
@@ -159,6 +160,9 @@ namespace RimExodus.Maps
                     if (cell.Name == "li") doc.mask.Add(ParseHelper.FromString<IntVec3>(cell.InnerText));
             if (root["environment"] != null)
                 doc.environment = DirectXmlToObject.ObjectFromXml<List<PrefabEnvironmentEntry>>(root["environment"], doPostLoad: false);
+            if (root["noRoof"] != null)
+                doc.noRoof = DirectXmlToObject.ObjectFromXml<List<IntVec3>>(root["noRoof"], doPostLoad: false);
+            doc.ValidateNoRoof();
             MapPrefabEnvironment.Validate(doc);
             foreach (XmlNode child in statesNode.ChildNodes)
             {
@@ -217,6 +221,7 @@ namespace RimExodus.Maps
 
         public string ToXml()
         {
+            ValidateNoRoof();
             MapPrefabEnvironment.Validate(this);
             var text = new StringBuilder();
             var settings = new XmlWriterSettings
@@ -307,6 +312,12 @@ namespace RimExodus.Maps
                     }
                     writer.WriteEndElement();
                 }
+                if (noRoof.Count > 0)
+                {
+                    writer.WriteStartElement("noRoof");
+                    foreach (IntVec3 cell in noRoof) writer.WriteElementString("li", cell.ToString());
+                    writer.WriteEndElement();
+                }
                 writer.WriteStartElement("environment");
                 foreach (PrefabEnvironmentEntry entry in environment)
                 {
@@ -322,6 +333,17 @@ namespace RimExodus.Maps
                 writer.WriteEndElement();
             }
             return text.ToString();
+        }
+
+        internal void ValidateNoRoof()
+        {
+            if (noRoof == null) throw new InvalidDataException("Missing prefab no-roof area list.");
+            var seen = new HashSet<IntVec3>();
+            var selected = mask.Count == 0 ? null : new HashSet<IntVec3>(mask);
+            foreach (IntVec3 cell in noRoof)
+                if (cell.y != 0 || cell.x < 0 || cell.z < 0 || cell.x >= size.x || cell.z >= size.z
+                    || !seen.Add(cell) || selected != null && !selected.Contains(cell))
+                    throw new InvalidDataException("Invalid, duplicate or unselected no-roof area cell: " + cell);
         }
 
     }

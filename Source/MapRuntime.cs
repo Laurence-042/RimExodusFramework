@@ -13,6 +13,7 @@ namespace RimExodus.Maps
         public readonly CrossMapCombat Combat = new CrossMapCombat();
         public readonly MapRenderService Rendering = new MapRenderService();
         public readonly MapSpatialQueries Spatial = new MapSpatialQueries();
+        internal readonly PrefabGenerationEnvironment PrefabEnvironment = new PrefabGenerationEnvironment();
         private readonly Dictionary<Map, string> owners = new Dictionary<Map, string>();
         private readonly Dictionary<Map, int> generations = new Dictionary<Map, int>();
         private readonly Dictionary<string, Func<Map, bool>> stopPolicies = new Dictionary<string, Func<Map, bool>>();
@@ -50,6 +51,7 @@ namespace RimExodus.Maps
             TickRates.Forget(map);
             Combat.Forget(map);
             Rendering.Forget(map);
+            PrefabEnvironment.Forget(map);
         }
     }
 
