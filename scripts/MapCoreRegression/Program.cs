@@ -26,6 +26,11 @@ if (args.Length > 1 && args[0] == "api")
     }
     return;
 }
+if (args.Length == 2 && args[0] == "archive-smash")
+{
+    SmashArchiveChecks.Run(args[1]);
+    return;
+}
 Checks.Run();
 BindingChecks.Run(game);
 CorePatchInstallationChecks.Run();
@@ -37,6 +42,7 @@ SpatialChecks.Run();
 ArchiveReferenceChecks.Run();
 ArchiveCompressionChecks.Run();
 ArchiveContextChecks.Run();
+ArchiveCleanupChecks.Run();
 PrefabEnvironmentChecks.Run();
 
 static class Checks

@@ -1,4 +1,6 @@
 1.0.3
+- 修复：与 Vehicle Framework／SmashTools 共存时，归档地图恢复因旧缓存或重复初始化而报地图 ID 冲突；补齐缓存释放和半初始化绘图区的失败清理。用户已确认本轮实测无明显问题。
+  Fixed: archived maps could fail to restore with Vehicle Framework/SmashTools because of stale caches or duplicate initialization. Added cache cleanup and safe disposal of partially initialized map rendering resources. The user confirmed no apparent issues in this round of in-game testing.
 - 新增：区域 prefab 保存并恢复室内温度与真空度，支持旋转；局部导入按格数与目标房间现有环境混合，露天和破口沿用原版规则。
   Added: region prefabs preserve indoor temperature and vacuum through rotation and reconstruction. Partial imports mix with the destination room by cell count; outdoor and breached rooms follow vanilla rules.
 - 验证：两版构建与环境专项离线回归通过，Delta-V 教程已改为读取 prefab 环境设置，用户实测通过。

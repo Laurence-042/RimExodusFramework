@@ -176,19 +176,23 @@ static class ArchiveContextChecks
             Check(!MapArchive.TryCapture(map, out _), "background-thread caller cannot enter Scribe");
             mainThread = true;
             Check(!MapArchive.TryRestore(data, 42, parent, out _), "live map identity blocks duplicate restore");
+            SmashArchiveChecks.Seed(map);
             Check(MapArchive.TryUnload(map, preserveExternalEvents: false) && !maps.Contains(map),
                 "production unload removes source before restore");
+            SmashArchiveChecks.AssertCache(map, false);
             errors.Clear(); disposed.Clear();
             for (int repeat = 0; repeat < 2; repeat++)
             {
                 errors.Clear();
                 finalizedWithContext = parentWithContext = false;
                 Check(MapArchive.TryRestore(data, 42, parent, out Map restored), "production restore succeeds");
+                SmashArchiveChecks.AssertCache(restored, true);
                 Check(finalizedWithContext && parentWithContext && restored.Parent == parent && restored.uniqueID == 42,
                     "map and parent finalize with correct metadata, loading state, identity and registration");
                 Check(RestoredContext(), "successful restore restores caller globals and Scribe lease");
                 Check(errors.Count == 0, "successful restore emits no Scribe/context errors");
                 Check(MapArchive.TryUnload(restored, preserveExternalEvents: false), "restored map can be unloaded again");
+                SmashArchiveChecks.AssertCache(restored, false);
             }
             disposed.Clear(); failLoad = true;
             Check(!MapArchive.TryRestore(data, 42, parent, out _) && disposed.Contains(lastLoaded)
@@ -196,10 +200,13 @@ static class ArchiveContextChecks
             failLoad = false; disposed.Clear(); failFinalize = true;
             Check(!MapArchive.TryRestore(data, 42, parent, out _) && disposed.Contains(lastLoaded)
                 && maps.Count == 0 && RestoredContext(), "post-registration failure removes partial map and restores globals");
+            SmashArchiveChecks.AssertCache(lastLoaded, false);
             failFinalize = false;
             failAdd = true; disposed.Clear();
-            Check(!MapArchive.TryRestore(data, 42, parent, out _) && disposed.Contains(lastLoaded)
-                && maps.Count == 0 && RestoredContext(), "AddMap notification failure rolls back actual registration");
+            Check(MapArchive.TryRestore(data, 42, parent, out Map withoutAddMap) && RestoredContext(),
+                "restore uses native load registration without invoking new-map AddMap hooks");
+            SmashArchiveChecks.AssertCache(withoutAddMap, true);
+            Check(MapArchive.TryUnload(withoutAddMap, preserveExternalEvents: false), "load-path registration unloads normally");
             failAdd = false;
             disposed.Clear();
             Check(!MapArchive.TryRestore(data, 43, parent, out _) && disposed.Contains(lastLoaded)

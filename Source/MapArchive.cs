@@ -142,7 +142,8 @@ namespace RimExodus.Maps
             Cleanup(() => MapComponentUtility.MapRemoved(map));
             Cleanup(() => Find.Storyteller.incidentQueue.Notify_MapRemoved(map));
             Cleanup(() => Find.Scenario.MapRemoved(map));
-            Cleanup(map.Dispose);
+            Cleanup(() => ArchiveMapCleanup.Dispose(map));
+            SmashToolsArchiveCompat.ClearMap(map);
             Cleanup(() => Find.ColonistBar.MarkColonistsDirty());
             Cleanup(() => MapRuntime.Current?.Forget(map));
             return true;
@@ -178,8 +179,10 @@ namespace RimExodus.Maps
                 var loadedIds = new HashSet<string>(Scribe.loader.crossRefs.crossReferencingExposables
                     .OfType<ILoadReferenceable>().Where(CanRegisterExternalReference).Select(t => t.GetUniqueLoadID()));
                 RegisterExternalReferences(loaded, loadedIds);
-                Current.Game.AddMap(loaded);
-                if (!Find.Maps.Contains(loaded)) throw new InvalidOperationException("Restored map was not registered in Game.maps.");
+                // Game.LoadGame publishes loaded maps before resolving references, without
+                // AddMap (the new-map hook). Calling both AddMap and FinalizeLoading runs
+                // SmashTools' detached-component initialization twice for the same ID.
+                Current.Game.Maps.Add(loaded);
                 Scribe.loader.FinalizeLoading();
                 if (loaded.uniqueID != expectedMapId || loaded.Parent != expectedParent)
                     throw new InvalidDataException("Restored map identity or pocket parent differs from archive.");
@@ -188,6 +191,7 @@ namespace RimExodus.Maps
                 var restoredIds = new HashSet<string>(loaded.listerThings.AllThings.Select(t => t.ThingID));
                 if (SavedIds(document).Any(id => !restoredIds.Contains(id)))
                     throw new InvalidDataException("Map loading failed to spawn one or more persistent Things.");
+                Find.ColonistBar.MarkColonistsDirty();
                 map = loaded;
                 return true;
             }
@@ -198,8 +202,7 @@ namespace RimExodus.Maps
                 // null if that call throws. Recover it before ForceStop clears the list.
                 loaded ??= Scribe.loader.crossRefs.crossReferencingExposables.OfType<Map>().FirstOrDefault();
                 Scribe.ForceStop();
-                // AddMap can throw from a notification after it has already inserted
-                // the map. Actual registration, not method return, decides rollback.
+                // Actual registration decides whether rollback must also repair map indices.
                 if (loaded != null && Find.Maps.Contains(loaded))
                 {
                     // FinalizeLoading 可能已生成部分 Thing/Region；复用唯一卸图入口清理索引。
@@ -210,7 +213,7 @@ namespace RimExodus.Maps
                 }
                 else if (loaded != null)
                 {
-                    try { loaded.Dispose(); }
+                    try { ArchiveMapCleanup.Dispose(loaded); }
                     catch (Exception cleanupError)
                     { Log.Error($"[RimExodus.Maps] Partial map construction cleanup failed: {cleanupError}"); }
                 }
