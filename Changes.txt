@@ -13,8 +13,6 @@
   Fixed: full-map restoration could lose references to building style sources, pawn policies, art tales, and contents held by world objects.
 - 修复：补齐地图恢复收尾和失败清理，避免存读档重入或地图生成期间启动归档操作。
   Fixed: completed map restoration finalization and failure cleanup, and prevented archive operations from overlapping save/load operations or map generation.
-- 开发快照说明：没有版本头的旧整图归档不再恢复；测试请使用新档或重新生成归档。
-  Development snapshot note: old full-map archives without a version header are no longer restored. Use a new game or newly captured archives for testing.
 
 1.0.1
 - 修复：与 Vehicle Map Framework 同时使用时，地面角色向载具内部目标射击可能会立即取消；现在可以正常开火
