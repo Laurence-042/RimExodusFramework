@@ -37,6 +37,7 @@ CorePatchInstallationChecks.Run();
 RenderGateChecks.Run(game);
 DrawCaptureChecks.Run();
 NativeRenderChecks.Run();
+SectionMeshBatchChecks.Run();
 RenderViewCompatChecks.Run();
 SpatialChecks.Run();
 ArchiveReferenceChecks.Run();

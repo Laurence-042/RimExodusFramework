@@ -1,3 +1,9 @@
+1.0.4
+- 新增：调用方可通过 REF 按区块、表面层和实际材质合批静态平面，并按脏区延迟重建和释放网格缓存。
+  Added: REF can batch static planes by section, surface and material, rebuild dirty sections on demand, and dispose cached meshes.
+- 接入：Delta-V 船壳使用共用缓存。甲板、实体盖板、月池和跨块建筑的失效范围仍由 Delta-V 决定。
+  Integration: Delta-V ship shells use the shared cache. Delta-V still selects decks, solid covers and moon pools, and determines which sections a multi-cell building invalidates.
+
 1.0.3
 - 修复：与 Vehicle Framework／SmashTools 共存时，归档地图恢复因旧缓存或重复初始化而报地图 ID 冲突；补齐缓存释放和半初始化绘图区的失败清理。用户已确认本轮实测无明显问题。
   Fixed: archived maps could fail to restore with Vehicle Framework/SmashTools because of stale caches or duplicate initialization. Added cache cleanup and safe disposal of partially initialized map rendering resources. The user confirmed no apparent issues in this round of in-game testing.
