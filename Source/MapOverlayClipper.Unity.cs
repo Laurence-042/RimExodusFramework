@@ -16,12 +16,13 @@ namespace RimExodus.Maps
             foreach (var mesh in meshes) Object.Destroy(mesh);
             meshes.Clear(); cursor = 0;
         }
-        internal bool Clip(ref Mesh mesh, Matrix4x4 matrix, ref int submesh, MapRenderPlan plan)
+        internal bool Clip(ref Mesh mesh, Matrix4x4 matrix, ref int submesh, MapRenderPlan plan, bool? selection)
         {
             var footprint = plan.OverlayFootprint;
-            if (mesh == null || !mesh.isReadable || footprint == null || footprint.Count < 3
+            if (selection == false || mesh == null || !mesh.isReadable || footprint == null || footprint.Count < 3
                 || submesh < 0 || submesh >= mesh.subMeshCount || mesh.GetTopology(submesh) != MeshTopology.Triangles
                 || mesh.HasVertexAttribute(VertexAttribute.BlendIndices) || mesh.HasVertexAttribute(VertexAttribute.BlendWeight)) return true;
+            bool explicitClip = selection == true;
             var bounds = mesh.bounds;
             Vector3 min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue), max = -min;
             for (int x = 0; x < 2; x++) for (int y = 0; y < 2; y++) for (int z = 0; z < 2; z++)
@@ -31,7 +32,7 @@ namespace RimExodus.Maps
                 min = Vector3.Min(min, p); max = Vector3.Max(max, p);
             }
             // Bounds are a conservative culling volume, not the actual thickness of this submesh.
-            if (!MapOverlayGeometry.HasLargeSpan(min, max, plan.Source.Size.x, plan.Source.Size.z)) return true;
+            if (!explicitClip && !MapOverlayGeometry.HasLargeSpan(min, max, plan.Source.Size.x, plan.Source.Size.z)) return true;
             var positions = mesh.vertices;
             var indices = mesh.GetIndices(submesh);
             min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue); max = -min;
@@ -40,7 +41,8 @@ namespace RimExodus.Maps
                 var point = matrix.MultiplyPoint3x4(positions[index]);
                 min = Vector3.Min(min, point); max = Vector3.Max(max, point);
             }
-            if (!MapOverlayGeometry.IsLargeFlat(min, max, plan.Source.Size.x, plan.Source.Size.z)) return true;
+            if (indices.Length == 0 || !MapOverlayGeometry.IsClipCandidate(min, max, plan.Source.Size.x, plan.Source.Size.z, explicitClip)) return true;
+            if (explicitClip && MapOverlayGeometry.TryClassifyBounds(min, max, footprint, out bool inside)) return inside;
             var vertices = new List<(int a, int b, int c, Vector3 weights)>();
             for (int i = 0; i + 2 < indices.Length; i += 3)
             {

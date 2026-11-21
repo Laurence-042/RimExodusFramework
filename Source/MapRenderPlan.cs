@@ -19,6 +19,9 @@ namespace RimExodus.Maps
         public Action<Map, Action<MapDrawCommand>> CustomDraw;
         /// <summary>Optional convex source-local footprint for large planar overlays. Keep this list immutable.</summary>
         public IReadOnlyList<Vector2> OverlayFootprint;
+        /// <summary>For native submissions with an overlay footprint: true also clips small planar meshes,
+        /// false skips clipping, and null keeps the automatic large-overlay rule.</summary>
+        public Func<MapDrawCommand, bool?> OverlayClipSelector;
     }
 
     /// <summary>Freezes the map, display transform and view used for both drawing and picking.</summary>
@@ -35,6 +38,7 @@ namespace RimExodus.Maps
         public readonly CellRect LocalView;
         private readonly MapRenderOptions options;
         internal IReadOnlyList<Vector2> OverlayFootprint => options.OverlayFootprint;
+        internal Func<MapDrawCommand, bool?> OverlayClipSelector => options.OverlayClipSelector;
         [ThreadStatic] private static MapRenderPlan drawing;
 
         public MapRenderPlan(Map source, Matrix4x4 transform, CellRect displayView, MapRenderOptions options = null)
@@ -50,7 +54,7 @@ namespace RimExodus.Maps
             return !Source.Disposed && cell.InBounds(Source);
         }
         /// <summary>Selective capture path. Rendering.SetProvider uses original frame callbacks instead;
-        /// only OverlayFootprint applies there, not the selective filters or CustomDraw.</summary>
+        /// OverlayFootprint and OverlayClipSelector apply there, not the selective filters or CustomDraw.</summary>
         public void Collect(Action<MapDrawCommand> output)
         {
             if (Source.Disposed) return;

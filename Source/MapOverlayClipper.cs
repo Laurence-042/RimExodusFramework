@@ -18,31 +18,36 @@ namespace RimExodus.Maps
             internal int Used;
             internal bool Changed;
         }
-        private readonly Dictionary<(NativeMesh, int, System.Numerics.Matrix4x4), Entry> entries =
-            new Dictionary<(NativeMesh, int, System.Numerics.Matrix4x4), Entry>();
-        private readonly List<(NativeMesh, int, System.Numerics.Matrix4x4)> stale = new List<(NativeMesh, int, System.Numerics.Matrix4x4)>();
+        private readonly Dictionary<(NativeMesh, int, System.Numerics.Matrix4x4, bool), Entry> entries = new();
+        private readonly List<(NativeMesh, int, System.Numerics.Matrix4x4, bool)> stale = new();
         private IReadOnlyList<Vector2> footprint;
         internal MeshDrawCommand Clip(in MeshDrawCommand command, MapRenderPlan plan)
         {
             if (plan.OverlayFootprint == null || plan.OverlayFootprint.Count < 3 || command.Mesh == null || command.Instancing != null)
                 return command;
-            // Reject moving pawns/flecks and small sections before allocating cache entries or reading vertex arrays.
+            var selection = plan.OverlayClipSelector?.Invoke(new MapDrawCommand(command));
+            if (selection == false) return command;
+            bool explicitClip = selection == true;
             var bounds = command.Mesh.Bounds;
-            var m = new MapDrawCommand(command).Matrix;
-            var size = bounds.Size;
-            var span = new Vector3(Math.Abs(m.m00) * size.X + Math.Abs(m.m01) * size.Y + Math.Abs(m.m02) * size.Z,
-                Math.Abs(m.m10) * size.X + Math.Abs(m.m11) * size.Y + Math.Abs(m.m12) * size.Z,
-                Math.Abs(m.m20) * size.X + Math.Abs(m.m21) * size.Y + Math.Abs(m.m22) * size.Z);
-            // Bounds may deliberately include vertical culling padding. Only referenced vertices establish planarity.
-            if (bounds.IsEmpty || !MapOverlayGeometry.HasLargeSpan(Vector3.zero, span, plan.Source.Size.x, plan.Source.Size.z))
-                return command;
+            if (bounds.IsEmpty) return command;
+            // Keep automatic small sections and moving things out of the cache and vertex reads.
+            if (!explicitClip)
+            {
+                var m = new MapDrawCommand(command).Matrix;
+                var size = bounds.Size;
+                var span = new Vector3(Math.Abs(m.m00) * size.X + Math.Abs(m.m01) * size.Y + Math.Abs(m.m02) * size.Z,
+                    Math.Abs(m.m10) * size.X + Math.Abs(m.m11) * size.Y + Math.Abs(m.m12) * size.Z,
+                    Math.Abs(m.m20) * size.X + Math.Abs(m.m21) * size.Y + Math.Abs(m.m22) * size.Z);
+                if (!MapOverlayGeometry.HasLargeSpan(Vector3.zero, span, plan.Source.Size.x, plan.Source.Size.z))
+                    return command;
+            }
             if (!ReferenceEquals(footprint, plan.OverlayFootprint)) { Dispose(); footprint = plan.OverlayFootprint; }
-            var key = (command.Mesh, command.SubmeshIndex, command.Matrix);
+            var key = (command.Mesh, command.SubmeshIndex, command.Matrix, explicitClip);
             if (!entries.TryGetValue(key, out var entry) || entry.Version != command.Mesh.Version)
             {
                 entry?.Mesh?.Dispose();
                 entry = new Entry { Version = command.Mesh.Version };
-                entry.Mesh = Build(command, plan, out entry.Changed);
+                entry.Mesh = Build(command, plan, explicitClip, out entry.Changed);
                 entries[key] = entry;
             }
             entry.Used = Time.frameCount;
@@ -62,7 +67,7 @@ namespace RimExodus.Maps
             foreach (var entry in entries.Values) entry.Mesh?.Dispose();
             entries.Clear(); footprint = null;
         }
-        private NativeMesh Build(in MeshDrawCommand command, MapRenderPlan plan, out bool changed)
+        private NativeMesh Build(in MeshDrawCommand command, MapRenderPlan plan, bool explicitClip, out bool changed)
         {
             changed = false;
             var source = command.Mesh.CpuStorage;
@@ -70,7 +75,7 @@ namespace RimExodus.Maps
                 || !source.Layout.TryGetAttribute(VertexAttributeSemantic.Position, out var position)
                 || position.Format != VertexAttributeFormat.Float32 || position.Dimension != 3) return null;
             var sub = source.SubMeshes[command.SubmeshIndex];
-            if (sub.Topology != Waylith.Graphics.Meshes.MeshTopology.Triangles) return null;
+            if (sub.Topology != Waylith.Graphics.Meshes.MeshTopology.Triangles || sub.IndexCount == 0) return null;
             // Keep unknown packed/integer channels intact by declining to alter such meshes.
             foreach (var attr in source.Layout.Attributes)
                 if (attr.Format != VertexAttributeFormat.Float32 && attr.Format != VertexAttributeFormat.UNorm8) return null;
@@ -86,7 +91,9 @@ namespace RimExodus.Maps
                 var point = Point(Index(i));
                 min = Vector3.Min(min, point); max = Vector3.Max(max, point);
             }
-            if (!MapOverlayGeometry.IsLargeFlat(min, max, plan.Source.Size.x, plan.Source.Size.z)) return null;
+            if (!MapOverlayGeometry.IsClipCandidate(min, max, plan.Source.Size.x, plan.Source.Size.z, explicitClip)) return null;
+            if (explicitClip && MapOverlayGeometry.TryClassifyBounds(min, max, footprint, out bool inside))
+            { changed = !inside; return null; }
             var vertices = new List<(int a, int b, int c, Vector3 weights)>();
             for (int i = sub.IndexStart; i + 2 < sub.IndexStart + sub.IndexCount; i += 3)
             {

@@ -183,11 +183,14 @@ namespace RimExodus.Maps
                 new[] { typeof(Mesh), typeof(Matrix4x4), typeof(Material), typeof(int), typeof(Camera), typeof(int),
                     typeof(MaterialPropertyBlock), typeof(UnityEngine.Rendering.ShadowCastingMode), typeof(bool), typeof(Transform),
                     typeof(UnityEngine.Rendering.LightProbeUsage), typeof(LightProbeProxyVolume) });
-            private static bool Prefix(ref Mesh __0, ref Matrix4x4 __1, ref Material __2, ref int __5)
+            private static bool Prefix(ref Mesh __0, ref Matrix4x4 __1, ref Material __2, int __3, ref int __5,
+                MaterialPropertyBlock __6)
             {
                 var plan = MapRenderScope.Current;
                 if (plan == null || __2 == null) return true;
-                if (!MapRuntime.Current.Rendering.UnityClipper.Clip(ref __0, __1, ref __5, plan)) return false;
+                var selection = plan.OverlayFootprint?.Count >= 3
+                    ? plan.OverlayClipSelector?.Invoke(new MapDrawCommand(__0, __1, __2, __5, __6, __3)) : null;
+                if (!MapRuntime.Current.Rendering.UnityClipper.Clip(ref __0, __1, ref __5, plan, selection)) return false;
                 __1 = plan.Transform.Matrix * __1;
                 __2 = FreezeMaterial(__2);
                 return true;

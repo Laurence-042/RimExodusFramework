@@ -43,7 +43,7 @@ namespace RimExodus.Maps
 #endif
         /// <summary>Called before map updates each frame. Supply source-local to display plans;
         /// include the focused map with identity to clip its overlays too. Null unregisters the provider.
-        /// Native callbacks ignore selective Collect options except OverlayFootprint.</summary>
+        /// Set overlay clipping with OverlayFootprint and OverlayClipSelector.</summary>
         public void SetProvider(string owner, Action<Map, List<MapRenderPlan>> provider)
         {
             if (provider == null) providers.Remove(owner);

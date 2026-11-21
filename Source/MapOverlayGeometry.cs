@@ -5,7 +5,7 @@ using UnityEngine;
 namespace RimExodus.Maps
 {
     // Clip in source-map space, preserving barycentric weights so every original vertex channel can be interpolated.
-    // Only large, flat overlays opt into this operation. It is not a general 3D visibility/occlusion solution.
+    // Only supported planar overlays opt into this operation.
     internal static class MapOverlayGeometry
     {
         internal readonly struct Vertex
@@ -16,10 +16,7 @@ namespace RimExodus.Maps
         internal static List<Vertex> Clip(Vector3 a, Vector3 b, Vector3 c, IReadOnlyList<Vector2> footprint)
         {
             var vertices = new List<Vertex> { new Vertex(a, Vector3.right), new Vertex(b, Vector3.up), new Vertex(c, Vector3.forward) };
-            float area = 0;
-            for (int i = 0; i < footprint.Count; i++)
-            { var p = footprint[i]; var q = footprint[(i + 1) % footprint.Count]; area += p.x * q.y - q.x * p.y; }
-            float sign = area >= 0 ? 1 : -1;
+            float sign = WindingSign(footprint);
             for (int i = 0; i < footprint.Count && vertices.Count != 0; i++)
             {
                 var p = footprint[i]; var q = footprint[(i + 1) % footprint.Count];
@@ -45,7 +42,33 @@ namespace RimExodus.Maps
         }
         internal static bool HasLargeSpan(Vector3 min, Vector3 max, int mapWidth, int mapHeight) =>
             max.x - min.x > mapWidth * 0.5f || max.z - min.z > mapHeight * 0.5f;
-        internal static bool IsLargeFlat(Vector3 min, Vector3 max, int mapWidth, int mapHeight) =>
-            max.y - min.y < 0.01f && HasLargeSpan(min, max, mapWidth, mapHeight);
+        internal static bool IsClipCandidate(Vector3 min, Vector3 max, int mapWidth, int mapHeight, bool explicitClip) =>
+            max.y - min.y < 0.01f && (explicitClip || HasLargeSpan(min, max, mapWidth, mapHeight));
+
+        // A section entirely inside can retain its original mesh. An outside half-plane rejects the whole section.
+        internal static bool TryClassifyBounds(Vector3 min, Vector3 max, IReadOnlyList<Vector2> footprint, out bool inside)
+        {
+            inside = true;
+            float sign = WindingSign(footprint);
+            for (int i = 0; i < footprint.Count; i++)
+            {
+                var p = footprint[i];
+                var q = footprint[(i + 1) % footprint.Count];
+                float x = sign * (p.y - q.y), z = sign * (q.x - p.x);
+                float high = x * ((x >= 0 ? max.x : min.x) - p.x) + z * ((z >= 0 ? max.z : min.z) - p.y);
+                if (high < 0) { inside = false; return true; }
+                float low = x * ((x >= 0 ? min.x : max.x) - p.x) + z * ((z >= 0 ? min.z : max.z) - p.y);
+                if (low < 0) inside = false;
+            }
+            return inside;
+        }
+
+        private static float WindingSign(IReadOnlyList<Vector2> footprint)
+        {
+            float area = 0;
+            for (int i = 0; i < footprint.Count; i++)
+            { var p = footprint[i]; var q = footprint[(i + 1) % footprint.Count]; area += p.x * q.y - q.x * p.y; }
+            return area >= 0 ? 1 : -1;
+        }
     }
 }

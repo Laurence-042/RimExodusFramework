@@ -30,13 +30,13 @@ internal static class NativeRenderChecks
             Check(Math.Abs(Math.Abs(area) / 2 - 100) < 0.001f, "Clipped triangles cover footprint area");
         }
         Check(MapOverlayGeometry.Clip(a, a + Vector3.right, a + Vector3.forward, footprint).Count == 0, "Outside overlay omitted");
-        Check(!MapOverlayGeometry.IsLargeFlat(Vector3.zero, new Vector3(100, 5, 100), 100, 100), "3D geometry untouched");
-        Check(!MapOverlayGeometry.IsLargeFlat(Vector3.zero, new Vector3(5, 0, 5), 100, 100), "Small geometry untouched");
+        Check(!MapOverlayGeometry.IsClipCandidate(Vector3.zero, new Vector3(100, 5, 100), 100, 100, false), "3D geometry untouched");
+        Check(!MapOverlayGeometry.IsClipCandidate(Vector3.zero, new Vector3(5, 0, 5), 100, 100, false), "Small geometry untouched");
 
         var map = (Verse.Map)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Verse.Map));
         map.info = new Verse.MapInfo { Size = new Verse.IntVec3(20, 1, 20) };
-        var plan = new MapRenderPlan(map, Matrix4x4.identity, new Verse.CellRect(0, 0, 20, 20),
-            new MapRenderOptions { OverlayFootprint = footprint });
+        var options = new MapRenderOptions { OverlayFootprint = footprint };
+        var plan = new MapRenderPlan(map, Matrix4x4.identity, new Verse.CellRect(0, 0, 20, 20), options);
         var cpu = new CpuMeshData();
         cpu.SetVertexLayout(new VertexLayout(new[] {
             new VertexAttribute(VertexAttributeSemantic.Position, VertexAttributeFormat.Float32, 3, 0, 0),
@@ -82,6 +82,28 @@ internal static class NativeRenderChecks
             sourceData[5] = -9; sourceData[12] = -9;
             mesh.MarkCpuStorageChanged();
             Check(ReferenceEquals(clipper.Clip(draw, plan).Mesh, mesh), "Padded bounds cannot turn a small triangle into a large overlay");
+            sourceData[0] = -1; sourceData[2] = 5;
+            sourceData[5] = 1; sourceData[7] = 5;
+            sourceData[10] = 1; sourceData[12] = 6;
+            mesh.MarkCpuStorageChanged();
+            bool? selection = null;
+            options.OverlayClipSelector = command => command.Layer == 7 ? selection : null;
+            Check(ReferenceEquals(clipper.Clip(draw, plan).Mesh, mesh), "Null selection leaves the small section unchanged");
+            selection = true;
+            var section = clipper.Clip(draw, plan).Mesh;
+            Check(section != null && section != mesh, "An explicit small section is clipped after automatic rejection");
+            selection = false;
+            Check(ReferenceEquals(clipper.Clip(draw, plan).Mesh, mesh), "Explicit skip uses the source mesh even with cached clipping");
+            selection = true;
+            sourceData[1] = 8;
+            mesh.MarkCpuStorageChanged();
+            Check(ReferenceEquals(clipper.Clip(draw, plan).Mesh, mesh), "Explicit selection still rejects non-planar meshes");
+            sourceData[1] = 3; sourceData[0] = 0.5f;
+            mesh.MarkCpuStorageChanged();
+            Check(ReferenceEquals(clipper.Clip(draw, plan).Mesh, mesh), "A selected section wholly inside keeps its mesh");
+            sourceData[0] = -2; sourceData[5] = -1; sourceData[10] = -1;
+            mesh.MarkCpuStorageChanged();
+            Check(clipper.Clip(draw, plan).Mesh == null, "A selected section wholly outside is omitted");
         }
 
         int inherited = ShaderPropertyId.GetOrCreate("_RefTestInherited"), authored = ShaderPropertyId.GetOrCreate("_RefTestAuthored"),
