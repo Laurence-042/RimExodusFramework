@@ -1,3 +1,7 @@
+1.0.5
+- 覆盖层裁切支持按绘制提交选择，分区绘制的小网格也能参与裁切。
+  Added per-submission clipping controls for overlays, including those drawn in small sections.
+
 1.0.4
 - 新增：调用方可通过 REF 按区块、表面层和实际材质合批静态平面，并按脏区延迟重建和释放网格缓存。
   Added: REF can batch static planes by section, surface and material, rebuild dirty sections on demand, and dispose cached meshes.
