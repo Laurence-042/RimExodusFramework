@@ -89,20 +89,24 @@ namespace RimExodus.Maps
         public static PrefabPlacementResult Rebuild(MapPrefabDocument doc, Map map, IntVec3 position, Rot4 rot,
             PrefabPlacement options)
         {
-            if (map == null || map.Disposed) return RebuildContent(doc, map, position, rot, options);
-            // Native oxygen pumps query their Room in SpawnSetup, before the
-            // environment layer is applied. Generation may have disabled regions.
-            bool enabled = map.regionAndRoomUpdater.Enabled;
+            var changes = doc?.ImportChanges.ToList() ?? new List<PrefabImportChange>();
             try
             {
-                map.regionAndRoomUpdater.Enabled = true;
-                return RebuildContent(doc, map, position, rot, options);
+                if (map == null || map.Disposed) return RebuildContent(doc, map, position, rot, options, changes);
+                // Oxygen pumps query their Room in SpawnSetup while generation can have regions disabled.
+                bool enabled = map.regionAndRoomUpdater.Enabled;
+                try
+                {
+                    map.regionAndRoomUpdater.Enabled = true;
+                    return RebuildContent(doc, map, position, rot, options, changes);
+                }
+                finally { map.regionAndRoomUpdater.Enabled = enabled; }
             }
-            finally { map.regionAndRoomUpdater.Enabled = enabled; }
+            finally { PrefabImportChange.Warn(doc, changes); }
         }
 
         private static PrefabPlacementResult RebuildContent(MapPrefabDocument doc, Map map, IntVec3 position, Rot4 rot,
-            PrefabPlacement options)
+            PrefabPlacement options, List<PrefabImportChange> changes)
         {
             var result = new PrefabPlacementResult();
             if (doc == null || options == null) throw new ArgumentNullException(doc == null ? nameof(doc) : nameof(options));
@@ -141,19 +145,34 @@ namespace RimExodus.Maps
             foreach (var entry in doc.roofs)
                 if (!(root + PrefabUtility.GetAdjustedLocalPosition(entry.pos, rotation)).InBounds(map))
                     result.Errors.Add("Roof extends outside the destination map.");
+            var placements = new List<(MapPrefabThingEntry entry, IntVec3 cell, Rot4 facing, CellRect footprint)>(doc.ThingCellCount);
             foreach (MapPrefabThingEntry entry in doc.thingEntries)
             {
                 IntVec3 cell = root + PrefabUtility.GetAdjustedThingLocalPosition(entry.def, rotation, entry.pos);
                 Rot4 facing = entry.def.rotatable ? rotation.Rotated(Rot4.GetRelativeRotation(Rot4.North, entry.rotation)) : entry.def.defaultPlacingRot;
-                if (!GenAdj.OccupiedRect(cell, facing, entry.def.Size).InBounds(map)) result.Errors.Add($"Out of bounds: {entry.def.defName}.");
+                CellRect footprint = GenAdj.OccupiedRect(cell, facing, entry.def.Size);
+                if (!footprint.InBounds(map))
+                {
+                    if (doc.SkipThingsOutOfBounds)
+                    {
+                        result.SkippedThings.Add(entry);
+                        changes.Add(new PrefabImportChange("out-of-bounds Thing", entry.def.defName, null, cell.ToString()));
+                    }
+                    else result.Errors.Add($"Out of bounds: {entry.def.defName} at {cell}.");
+                    continue;
+                }
                 if (!options.SkipProtectedThings && options.ProtectCell != null
-                    && entry.def.category == ThingCategory.Building
-                    && GenAdj.OccupiedRect(cell, facing, entry.def.Size).Any(c => options.ProtectCell(map, c)))
+                    && entry.def.category == ThingCategory.Building && footprint.Any(c => options.ProtectCell(map, c)))
                     result.Errors.Add($"Protected footprint: {entry.def.defName} at {cell}.");
+                placements.Add((entry, cell, facing, footprint));
             }
             if (!result.Success) return result;
             List<Thing> loaded;
-            try { loaded = MapPrefabThingState.Instantiate(doc.thingEntries, doc.name, options.Faction, options.Clone, options.PreserveFactions); }
+            try
+            {
+                loaded = MapPrefabThingState.Instantiate(placements.Select(placement => placement.entry).ToList(),
+                    doc.name, options.Faction, options.Clone, options.PreserveFactions, doc.SkipMissingFilterDefs, changes);
+            }
             catch (Exception error) { result.Errors.Add(error.ToString()); return result; }
             // Use native area state before any SpawnSetup can queue automatic roofing.
             // Existing roofs remain physical content; NoRoof schedules native removal.
@@ -187,13 +206,11 @@ namespace RimExodus.Maps
             for (int i = 0; i < loaded.Count; i++)
             {
                 Thing thing = loaded[i];
-                MapPrefabThingEntry entry = doc.thingEntries[i];
-                IntVec3 cell = root + PrefabUtility.GetAdjustedThingLocalPosition(entry.def, rotation, entry.pos);
-                Rot4 facing = entry.def.rotatable ? rotation.Rotated(Rot4.GetRelativeRotation(Rot4.North, entry.rotation)) : entry.def.defaultPlacingRot;
+                var (entry, cell, facing, footprint) = placements[i];
                 try
                 {
                     if (options.ProtectCell != null && thing.def.category == ThingCategory.Building
-                        && GenAdj.OccupiedRect(cell, facing, thing.def.Size).Any(c => options.ProtectCell(map, c)))
+                        && footprint.Any(c => options.ProtectCell(map, c)))
                     {
                         result.SkippedThings.Add(entry);
                         if (!options.SkipProtectedThings) result.Errors.Add($"Protected footprint: {entry.def.defName} at {cell}.");

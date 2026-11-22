@@ -48,6 +48,11 @@ namespace RimExodus.Maps
         public List<PrefabRoofEntry> roofs = new List<PrefabRoofEntry>();
         public List<IntVec3> noRoof = new List<IntVec3>();
         public List<PrefabEnvironmentEntry> environment = new List<PrefabEnvironmentEntry>();
+        internal string ImportSource => importSource ?? name;
+        internal bool SkipMissingFilterDefs { get; private set; }
+        internal bool SkipThingsOutOfBounds { get; private set; }
+        internal readonly List<PrefabImportChange> ImportChanges = new List<PrefabImportChange>();
+        private string importSource;
 
         private static readonly FieldInfo PrefabThingsField =
             typeof(PrefabDef).GetField("things", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -81,21 +86,23 @@ namespace RimExodus.Maps
             return def;
         }
 
-        public static MapPrefabDocument Load(string path)
+        public static MapPrefabDocument Load(string path) => Load(path, null);
+
+        public static MapPrefabDocument Load(string path, PrefabImportOptions options)
         {
             var xml = new XmlDocument();
             xml.Load(path);
-            return Read(xml, path);
+            return Read(xml, path, options);
         }
 
         public static MapPrefabDocument FromXml(string content)
         {
             var xml = new XmlDocument();
             xml.LoadXml(content);
-            return Read(xml, "embedded prefab");
+            return Read(xml, "embedded prefab", null);
         }
 
-        private static MapPrefabDocument Read(XmlDocument xml, string path)
+        private static MapPrefabDocument Read(XmlDocument xml, string path, PrefabImportOptions options)
         {
             XmlElement root = xml.DocumentElement;
             if (root == null || root.Name != "MapPrefab")
@@ -114,16 +121,37 @@ namespace RimExodus.Maps
                 throw new InvalidDataException($"MapPrefab has no <prefab> core node: {path}");
             }
 
-            PrefabDef parsed = DirectXmlToObject.ObjectFromXml<PrefabDef>(prefabNode, doPostLoad: false);
-            if (parsed == null)
-            {
-                throw new InvalidDataException($"MapPrefab <prefab> core node failed to parse: {path}");
-            }
             XmlElement foundationsNode = root["foundations"];
             XmlElement roofsNode = root["roofs"];
             XmlElement statesNode = root["thingStates"];
             if (statesNode == null)
                 throw new InvalidDataException($"MapPrefab has no <thingStates> node; export again: {path}");
+
+            string mapState = root["mapState"]?.InnerText;
+            if (!string.IsNullOrEmpty(mapState)) options = null;
+            var doc = new MapPrefabDocument
+            {
+                name = root["name"]?.InnerText,
+                importSource = path,
+                SkipMissingFilterDefs = options?.SkipMissingFilterDefs == true,
+                SkipThingsOutOfBounds = options?.SkipThingsOutOfBounds == true,
+                mapState = mapState,
+                sourceMapId = root["sourceMapId"] == null ? -1 : ParseHelper.FromString<int>(root["sourceMapId"].InnerText),
+                sourceOrigin = root["sourceOrigin"] == null ? IntVec3.Zero : ParseHelper.FromString<IntVec3>(root["sourceOrigin"].InnerText),
+            };
+            if (options != null)
+            {
+                doc.ImportTerrain(prefabNode["terrain"], options);
+                doc.ImportSidecar(foundationsNode, "foundation", options.MissingFoundation,
+                    ValidTerrain(options.DefaultFoundation, foundation: true));
+                doc.ImportSidecar(roofsNode, "roof", options.MissingRoof, LoadedDef(options.DefaultRoof));
+            }
+
+            PrefabDef parsed = DirectXmlToObject.ObjectFromXml<PrefabDef>(prefabNode, doPostLoad: false);
+            if (parsed == null)
+            {
+                throw new InvalidDataException($"MapPrefab <prefab> core node failed to parse: {path}");
+            }
             // foundations/roofs 必须与核心节点一起在 resolve 之前解析：Def 引用（TerrainDef/
             // RoofDef）在 ObjectFromXml 里注册为延迟交叉引用，任何一组在 resolve 之后才解析，
             // 其引用就永远不会被解析（def 留 null，下游 SetFoundation 逐格静默失败）。
@@ -145,16 +173,9 @@ namespace RimExodus.Maps
                 throw new InvalidDataException($"MapPrefab contains unresolved def references (see game log for 'Could not resolve cross-reference' entries): {path}");
             }
 
-            var doc = new MapPrefabDocument
-            {
-                name = root["name"]?.InnerText,
-                size = parsed.size,
-                foundations = foundations,
-                roofs = roofs,
-                mapState = root["mapState"]?.InnerText,
-                sourceMapId = root["sourceMapId"] == null ? -1 : ParseHelper.FromString<int>(root["sourceMapId"].InnerText),
-                sourceOrigin = root["sourceOrigin"] == null ? IntVec3.Zero : ParseHelper.FromString<IntVec3>(root["sourceOrigin"].InnerText),
-            };
+            doc.size = parsed.size;
+            doc.foundations = foundations;
+            doc.roofs = roofs;
             if (root["mask"] != null)
                 foreach (XmlNode cell in root["mask"].ChildNodes)
                     if (cell.Name == "li") doc.mask.Add(ParseHelper.FromString<IntVec3>(cell.InnerText));
@@ -167,25 +188,8 @@ namespace RimExodus.Maps
             foreach (XmlNode child in statesNode.ChildNodes)
             {
                 if (child is not XmlElement node || node.Name != "li") continue;
-                string defName = node["def"]?.InnerText;
-                ThingDef thingDef = DefDatabase<ThingDef>.GetNamedSilentFail(defName);
-                if (thingDef == null)
-                    throw new InvalidDataException($"MapPrefab state has missing ThingDef '{defName}': {path}");
-                string stuffName = node["stuff"]?.InnerText;
-                ThingDef stuff = string.IsNullOrEmpty(stuffName) ? null : DefDatabase<ThingDef>.GetNamedSilentFail(stuffName);
-                if (!string.IsNullOrEmpty(stuffName) && stuff == null)
-                    throw new InvalidDataException($"MapPrefab state has missing stuff '{stuffName}': {path}");
-                XmlElement state = node["state"]?["saveable"];
-                doc.thingEntries.Add(new MapPrefabThingEntry
-                {
-                    pos = ParseHelper.FromString<IntVec3>(node["pos"].InnerText),
-                    def = thingDef,
-                    stuff = stuff,
-                    rotation = ParseHelper.FromString<Rot4>(node["rotation"].InnerText),
-                    hitPoints = ParseHelper.FromString<int>(node["hitPoints"].InnerText),
-                    stackCount = ParseHelper.FromString<int>(node["stackCount"].InnerText),
-                    stateXml = state?.OuterXml,
-                });
+                MapPrefabThingEntry entry = doc.ReadThing(node, options);
+                if (entry != null) doc.thingEntries.Add(entry);
             }
             if (parsed.GetThings().Any())
                 throw new InvalidDataException($"MapPrefab state format cannot include legacy <prefab><things>: {path}");
@@ -207,6 +211,140 @@ namespace RimExodus.Maps
             }
             doc.terrain.AddRange(terrainByData.Values);
             return doc;
+        }
+
+        private MapPrefabThingEntry ReadThing(XmlElement node, PrefabImportOptions options)
+        {
+            string defName = node["def"]?.InnerText;
+            if (string.IsNullOrWhiteSpace(defName))
+                throw new InvalidDataException($"MapPrefab Thing entry has no Def name: {ImportSource}");
+            IntVec3 pos = ParseHelper.FromString<IntVec3>(node["pos"].InnerText);
+            ThingDef def = FindDef<ThingDef>(defName);
+            if (def == null)
+            {
+                if (options?.SkipMissingThings != true)
+                    throw new InvalidDataException($"MapPrefab state has missing ThingDef '{defName}' at {pos}: {ImportSource}");
+                ImportChanges.Add(new PrefabImportChange("ThingDef", defName, null, pos.ToString()));
+                return null;
+            }
+
+            XmlElement state = node["state"]?["saveable"];
+            string stuffName = node["stuff"]?.InnerText;
+            ThingDef stuff = FindDef<ThingDef>(stuffName);
+            string missingStuff = !string.IsNullOrEmpty(stuffName) && stuff == null ? stuffName : null;
+            if (options != null && missingStuff == null && def.MadeFromStuff)
+            {
+                string stateStuff = state?["stuff"]?.InnerText;
+                if (FindDef<ThingDef>(stateStuff) == null)
+                    missingStuff = string.IsNullOrEmpty(stateStuff) || stateStuff == "null" ? "(unset)" : stateStuff;
+                else if (stuff == null)
+                    missingStuff = "(unset)";
+            }
+
+            if (missingStuff != null)
+            {
+                if (options == null || options.MissingStuff == MissingPrefabDef.Error)
+                    throw new InvalidDataException($"MapPrefab state has missing stuff '{missingStuff}' for '{defName}' at {pos}: {ImportSource}");
+                stuff = options.MissingStuff == MissingPrefabDef.Replace ? SelectStuff(def, options) : null;
+                ImportChanges.Add(new PrefabImportChange("stuff for " + defName, missingStuff, stuff?.defName, pos.ToString()));
+                if (stuff == null) return null;
+                if (state != null) MapPrefabThingState.ReplaceStuff(state, stuff);
+            }
+
+            return new MapPrefabThingEntry
+            {
+                pos = pos,
+                def = def,
+                stuff = stuff,
+                rotation = ParseHelper.FromString<Rot4>(node["rotation"].InnerText),
+                hitPoints = ParseHelper.FromString<int>(node["hitPoints"].InnerText),
+                stackCount = ParseHelper.FromString<int>(node["stackCount"].InnerText),
+                stateXml = state?.OuterXml,
+                replacedStuff = missingStuff != null,
+            };
+        }
+
+        private void ImportTerrain(XmlElement terrainNode, PrefabImportOptions options)
+        {
+            if (terrainNode == null) return;
+            TerrainDef fallback = ValidTerrain(options.DefaultTerrain, foundation: false);
+            foreach (XmlElement node in terrainNode.ChildNodes.OfType<XmlElement>().ToList())
+            {
+                string name = node.Name == "li" ? node.InnerText : node.Name;
+                string location = node["rects"] == null ? "(no rects)"
+                    : string.Join(", ", node["rects"].ChildNodes.OfType<XmlElement>().Select(rect => rect.InnerText));
+                XmlElement entry = node;
+                if (FindDef<TerrainDef>(name) == null)
+                {
+                    TerrainDef replacement = ReplaceMissing("terrain", name, location, options.MissingTerrain, fallback);
+                    if (replacement == null)
+                    {
+                        terrainNode.RemoveChild(node);
+                        continue;
+                    }
+                    if (node.Name == "li")
+                    {
+                        node.InnerText = replacement.defName;
+                    }
+                    else
+                    {
+                        entry = node.OwnerDocument.CreateElement(replacement.defName);
+                        while (node.HasChildNodes) entry.AppendChild(node.FirstChild);
+                        terrainNode.ReplaceChild(entry, node);
+                    }
+                }
+
+                XmlElement color = entry["color"];
+                if (color == null || FindDef<ColorDef>(color.InnerText) != null) continue;
+                ReplaceMissing<ColorDef>("terrain color", color.InnerText, location,
+                    options.SkipMissingTerrainColors ? MissingPrefabDef.Skip : MissingPrefabDef.Error, null);
+                entry.RemoveChild(color);
+            }
+        }
+
+        private void ImportSidecar<T>(XmlElement layerNode, string layer, MissingPrefabDef mode, T fallback) where T : Def, new()
+        {
+            if (layerNode == null) return;
+            foreach (XmlElement node in layerNode.ChildNodes.OfType<XmlElement>().ToList())
+            {
+                XmlElement def = node["def"];
+                if (def == null || string.IsNullOrWhiteSpace(def.InnerText))
+                    throw new InvalidDataException($"MapPrefab {layer} entry has no Def name: {ImportSource}");
+                if (FindDef<T>(def.InnerText) != null) continue;
+                IntVec3 pos = ParseHelper.FromString<IntVec3>(node["pos"].InnerText);
+                T replacement = ReplaceMissing(layer, def.InnerText, pos.ToString(), mode, fallback);
+                if (replacement == null) layerNode.RemoveChild(node);
+                else def.InnerText = replacement.defName;
+            }
+        }
+
+        private T ReplaceMissing<T>(string layer, string name, string position, MissingPrefabDef mode, T fallback) where T : Def
+        {
+            if (mode == MissingPrefabDef.Error)
+                throw new InvalidDataException($"MapPrefab {layer} has missing Def '{name}' at {position}: {ImportSource}");
+            T replacement = mode == MissingPrefabDef.Replace ? fallback : null;
+            ImportChanges.Add(new PrefabImportChange(layer, name, replacement?.defName, position));
+            return replacement;
+        }
+
+        private static T FindDef<T>(string name) where T : Def, new()
+            => string.IsNullOrEmpty(name) || name == "null" ? null : DefDatabase<T>.GetNamedSilentFail(name);
+
+        private static T LoadedDef<T>(T def) where T : Def, new()
+            => def != null && FindDef<T>(def.defName) == def ? def : null;
+
+        private static TerrainDef ValidTerrain(TerrainDef def, bool foundation)
+            => LoadedDef(def) != null && def.isFoundation == foundation ? def : null;
+
+        private static ThingDef SelectStuff(ThingDef thing, PrefabImportOptions options)
+        {
+            ThingDef fallback = LoadedDef(options.DefaultStuff);
+            if (!thing.MadeFromStuff) return null;
+            if (fallback?.stuffProps?.CanMake(thing) == true) return fallback;
+            if (!options.UseVanillaDefaultStuff
+                || thing.defaultStuff == null && !GenStuff.AllowedStuffsFor(thing).Any()) return null;
+            fallback = LoadedDef(GenStuff.DefaultStuffFor(thing));
+            return fallback?.stuffProps?.CanMake(thing) == true ? fallback : null;
         }
 
         public void Save(string path)

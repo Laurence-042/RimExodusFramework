@@ -16,6 +16,118 @@ static class PrefabEnvironmentChecks
     static bool Quiet(ref bool __result) { __result = false; return false; }
     static bool SkipAreaNotifications() => false;
 
+    static readonly List<string> importWarnings = new();
+    static bool CaptureImportWarning(string text) { importWarnings.Add(text); return false; }
+
+    static void CheckDefImport(Map map, Harmony harmony, Action<bool, string> check, Action<Action, string> reject)
+    {
+        var terrain = Raw<TerrainDef>();
+        terrain.defName = "PrefabImportTestTerrain";
+        var foundation = Raw<TerrainDef>();
+        foundation.defName = "PrefabImportTestFoundation";
+        foundation.isFoundation = true;
+        var roof = new RoofDef { defName = "PrefabImportTestRoof" };
+        var thing = Raw<ThingDef>();
+        thing.defName = "PrefabImportTestThing";
+        thing.size = new IntVec2(2, 2);
+        thing.category = ThingCategory.Building;
+        thing.rotatable = true;
+        DefDatabase<TerrainDef>.Add(terrain);
+        DefDatabase<TerrainDef>.Add(foundation);
+        DefDatabase<RoofDef>.Add(roof);
+        DefDatabase<ThingDef>.Add(thing);
+
+        // Preserve native grid writes; rendering and dependent map notifications require a live map.
+        var skipNotifications = new HarmonyMethod(typeof(PrefabEnvironmentChecks), nameof(SkipAreaNotifications));
+        harmony.Patch(AccessTools.Method(typeof(TerrainGrid), "DoTerrainChangedEffects"), prefix: skipNotifications);
+        harmony.Patch(AccessTools.Method(typeof(MapDrawer), nameof(MapDrawer.MapMeshDirty),
+            new[] { typeof(IntVec3), typeof(ulong) }), prefix: skipNotifications);
+        harmony.Patch(AccessTools.Method(typeof(GlowGrid), nameof(GlowGrid.DirtyCell)), prefix: skipNotifications);
+        harmony.Patch(AccessTools.Method(typeof(MapEvents), nameof(MapEvents.Notify_RoofChanged)), prefix: skipNotifications);
+        harmony.Patch(AccessTools.Method(typeof(Log), nameof(Log.Warning), new[] { typeof(string) }),
+            prefix: new HarmonyMethod(typeof(PrefabEnvironmentChecks), nameof(CaptureImportWarning)));
+        map.mapDrawer = Raw<MapDrawer>();
+        map.glowGrid = Raw<GlowGrid>();
+        map.events = Raw<MapEvents>();
+
+        IntVec3 terrainCell = new(1, 0, 0), foundationCell = new(1, 0, 1), roofCell = new(0, 0, 1);
+        var source = new MapPrefabDocument { name = "fallback layers", size = new IntVec2(3, 3) };
+        source.mask.Add(IntVec3.Zero);
+        source.terrain.Add(new PrefabTerrainData
+        {
+            def = terrain,
+            color = new ColorDef { defName = "PrefabImportMissingColor" },
+            rects = new List<CellRect> { new(terrainCell.x, terrainCell.z, 1, 1) },
+        });
+        source.foundations.Add(new PrefabFoundationEntry { def = foundation, pos = foundationCell });
+        source.roofs.Add(new PrefabRoofEntry { def = roof, pos = roofCell });
+        source.thingEntries.Add(new MapPrefabThingEntry { def = thing, pos = new IntVec3(80, 0, 80) });
+        string xml = source.ToXml().Replace(terrain.defName, "PrefabImportMissingTerrain")
+            .Replace(foundation.defName, "PrefabImportMissingFoundation")
+            .Replace(roof.defName, "PrefabImportMissingRoof");
+        string file = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(file, xml);
+            reject(() => MapPrefabDocument.Load(file, new PrefabImportOptions()), "strict import rejects a missing terrain");
+            var policy = new PrefabImportOptions
+            {
+                MissingTerrain = MissingPrefabDef.Replace,
+                DefaultTerrain = terrain,
+                MissingFoundation = MissingPrefabDef.Replace,
+                DefaultFoundation = foundation,
+                MissingRoof = MissingPrefabDef.Replace,
+                DefaultRoof = roof,
+                SkipMissingTerrainColors = true,
+                SkipThingsOutOfBounds = true,
+            };
+            importWarnings.Clear();
+            MapPrefabDocument resolved = MapPrefabDocument.Load(file, policy);
+            check(importWarnings.Count == 0, "reading a prefab for preview does not warn");
+            check(resolved.terrain.Single().def == terrain && resolved.terrain.Single().color == null
+                && resolved.foundations.Single().def == foundation && resolved.roofs.Single().def == roof,
+                "import resolves each layer independently and drops the missing color");
+            check(resolved.thingEntries.Count == 1 && resolved.ImportChanges.Count == 4,
+                "only load-time adjustments are stored on the document");
+            for (int turn = 0; turn < 4; turn++)
+            {
+                Rot4 rotation = new(turn);
+                IntVec3 position = new(8 + 7 * turn, 0, 30);
+                IntVec3 root = PrefabUtility.GetRoot(resolved.BuildPrefabDef(), position, rotation);
+                IntVec3 At(IntVec3 local) => root + PrefabUtility.GetAdjustedLocalPosition(local, rotation);
+                importWarnings.Clear();
+                var result = MapPrefabs.Rebuild(resolved, map, position, rotation, new PrefabPlacement());
+                check(result.Success && result.SkippedThings.Single() == resolved.thingEntries.Single()
+                    && result.Things.Count == 0, "skip the single out-of-bounds footprint before instantiation");
+                check(map.terrainGrid.TerrainAt(At(terrainCell)) == terrain
+                    && map.terrainGrid.FoundationAt(At(foundationCell)) == foundation
+                    && map.roofGrid.RoofAt(At(roofCell)) == roof, "native fallback layer placement at rotation " + turn);
+                check(importWarnings.Count == 1 && importWarnings[0].Contains(file)
+                    && importWarnings[0].Contains("adjusted 5 entries") && importWarnings[0].Contains("out-of-bounds Thing"),
+                    "one aggregated warning identifies the source and all adjustments");
+            }
+
+            IntVec3 invalidPosition = new(-6, 0, -6);
+            check(!MapPrefabs.Rebuild(resolved, map, invalidPosition, Rot4.North, new PrefabPlacement()).Success,
+                "whole target outside map still fails");
+            policy.MissingTerrain = MissingPrefabDef.Skip;
+            policy.MissingRoof = MissingPrefabDef.Skip;
+            policy.DefaultFoundation = terrain;
+            var skipped = MapPrefabDocument.Load(file, policy);
+            check(skipped.terrain.Count == 0 && skipped.roofs.Count == 0 && skipped.foundations.Count == 0,
+                "explicit skips and an invalid foundation fallback omit the corresponding layers");
+            policy.SkipThingsOutOfBounds = false;
+            skipped = MapPrefabDocument.Load(file, policy);
+            check(!MapPrefabs.Rebuild(skipped, map, new IntVec3(8, 0, 30), Rot4.North, new PrefabPlacement()).Success,
+                "strict footprint policy still rejects a single out-of-bounds entity");
+        }
+        finally
+        {
+            importWarnings.Clear();
+            File.Delete(file);
+        }
+    }
+
     internal static void Run()
     {
         int count = 0;
@@ -221,7 +333,8 @@ static class PrefabEnvironmentChecks
             roofDoc.noRoof.RemoveAt(1);
             Check(!MapPrefabs.Rebuild(roofDoc, map, C(0,0), Rot4.North, new PrefabPlacement()).Success,
                 "roof area outside destination rejected before mutation");
-            Console.WriteLine($"{count} prefab environment checks passed (native Room/cell/XML, preassembled topology).");
+            CheckDefImport(map, harmony, Check, Reject);
+            Console.WriteLine($"{count} prefab environment and import checks passed (native Room/cell/XML, preassembled topology).");
         }
         finally
         {

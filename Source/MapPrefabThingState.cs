@@ -17,6 +17,7 @@ namespace RimExodus.Maps
         public int hitPoints;
         public int stackCount = 1;
         public string stateXml;
+        internal bool replacedStuff;
     }
 
     /// <summary>原版 Scribe 逐实例保存，整批读取以解析 prefab 内部引用。</summary>
@@ -67,6 +68,10 @@ namespace RimExodus.Maps
 
         public static List<Thing> Instantiate(IReadOnlyList<MapPrefabThingEntry> entries, string label, Faction faction,
             bool clone, bool preserveFactions)
+            => Instantiate(entries, label, faction, clone, preserveFactions, false, null);
+
+        internal static List<Thing> Instantiate(IReadOnlyList<MapPrefabThingEntry> entries, string label, Faction faction,
+            bool clone, bool preserveFactions, bool skipMissingFilters, List<PrefabImportChange> changes)
         {
             using var operation = new ScribeOperation(loading: true);
             var result = new List<Thing>();
@@ -88,6 +93,7 @@ namespace RimExodus.Maps
                     var source = new XmlDocument();
                     source.LoadXml(entry.stateXml);
                     XmlElement node = (XmlElement)document.ImportNode(source.DocumentElement, true);
+                    if (skipMissingFilters) RemoveMissingFilters(node, entry.pos, changes);
                     node = Rename(document, node, "li");
                     list.AppendChild(node);
                 }
@@ -114,8 +120,17 @@ namespace RimExodus.Maps
                     if (result.Count != entries.Count || result.Any(t => t == null))
                         throw new InvalidDataException("Scribe returned an incomplete prefab.");
                     for (int i = 0; i < entries.Count; i++)
-                        if (result[i].def != entries[i].def)
+                    {
+                        Thing thing = result[i];
+                        MapPrefabThingEntry entry = entries[i];
+                        if (thing.def != entry.def)
                             throw new InvalidDataException("Scribe returned a different ThingDef.");
+                        if (!entry.replacedStuff) continue;
+                        if (thing.Stuff != entry.stuff)
+                            throw new InvalidDataException("Scribe did not restore the replacement stuff.");
+                        if (thing.def.useHitPoints)
+                            thing.HitPoints = Math.Min(thing.HitPoints, thing.MaxHitPoints);
+                    }
                 }
                 finally
                 {
@@ -132,6 +147,41 @@ namespace RimExodus.Maps
             }
             while (result.Count < entries.Count) result.Add(null);
             return result;
+        }
+
+        internal static void ReplaceStuff(XmlElement state, ThingDef stuff)
+        {
+            XmlElement material = state["stuff"];
+            if (material == null)
+            {
+                material = state.OwnerDocument.CreateElement("stuff");
+                state.AppendChild(material);
+            }
+            material.RemoveAll();
+            material.InnerText = stuff.defName;
+        }
+
+        private static void RemoveMissingFilters(XmlElement state, IntVec3 pos, List<PrefabImportChange> changes)
+        {
+            foreach (XmlElement filter in state.SelectNodes(".//*[allowedDefs and disallowedSpecialFilters]"))
+            {
+                RemoveMissingFilterDefs<ThingDef>(filter["allowedDefs"], pos, changes);
+                RemoveMissingFilterDefs<SpecialThingFilterDef>(filter["disallowedSpecialFilters"], pos, changes);
+            }
+        }
+
+        private static void RemoveMissingFilterDefs<T>(XmlElement list, IntVec3 pos, List<PrefabImportChange> changes) where T : Def, new()
+        {
+            foreach (XmlElement item in list.ChildNodes.OfType<XmlElement>().ToList())
+            {
+                if (item.Name != "li") continue;
+                string name = item.InnerText;
+                string compatibleName = BackCompatibility.BackCompatibleDefName(typeof(T), name, forDefInjections: false, item);
+                if (!string.IsNullOrEmpty(compatibleName) && DefDatabase<T>.GetNamedSilentFail(compatibleName) != null)
+                    continue;
+                changes.Add(new PrefabImportChange("filter " + list.Name, name, null, pos.ToString()));
+                list.RemoveChild(item);
+            }
         }
 
         private static XmlElement Rename(XmlDocument document, XmlElement source, string name)
