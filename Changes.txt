@@ -1,3 +1,7 @@
+1.0.6
+- 17×17 格及以上的平面分区现在默认参与边界裁切，无需逐个模组适配。
+  Planar sections of 17×17 cells or larger now use boundary clipping by default without per-mod adapters.
+
 1.0.5
 - 覆盖层裁切支持按绘制提交选择，分区绘制的小网格也能参与裁切。
   Added per-submission clipping controls for overlays, including those drawn in small sections.

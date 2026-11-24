@@ -8,6 +8,8 @@ namespace RimExodus.Maps
     // Only supported planar overlays opt into this operation.
     internal static class MapOverlayGeometry
     {
+        private const float AutomaticSectionSpan = 17f;
+
         internal readonly struct Vertex
         {
             internal readonly Vector3 Position, Weights;
@@ -40,8 +42,13 @@ namespace RimExodus.Maps
             }
             return vertices;
         }
-        internal static bool HasLargeSpan(Vector3 min, Vector3 max, int mapWidth, int mapHeight) =>
-            max.x - min.x > mapWidth * 0.5f || max.z - min.z > mapHeight * 0.5f;
+        internal static bool HasLargeSpan(Vector3 min, Vector3 max, int mapWidth, int mapHeight)
+        {
+            float width = max.x - min.x;
+            float height = max.z - min.z;
+            return (width >= AutomaticSectionSpan && height >= AutomaticSectionSpan)
+                || width > mapWidth * 0.5f || height > mapHeight * 0.5f;
+        }
         internal static bool IsClipCandidate(Vector3 min, Vector3 max, int mapWidth, int mapHeight, bool explicitClip) =>
             max.y - min.y < 0.01f && (explicitClip || HasLargeSpan(min, max, mapWidth, mapHeight));
 

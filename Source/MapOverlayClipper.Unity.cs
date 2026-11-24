@@ -42,7 +42,7 @@ namespace RimExodus.Maps
                 min = Vector3.Min(min, point); max = Vector3.Max(max, point);
             }
             if (indices.Length == 0 || !MapOverlayGeometry.IsClipCandidate(min, max, plan.Source.Size.x, plan.Source.Size.z, explicitClip)) return true;
-            if (explicitClip && MapOverlayGeometry.TryClassifyBounds(min, max, footprint, out bool inside)) return inside;
+            if (MapOverlayGeometry.TryClassifyBounds(min, max, footprint, out bool inside)) return inside;
             var vertices = new List<(int a, int b, int c, Vector3 weights)>();
             for (int i = 0; i + 2 < indices.Length; i += 3)
             {

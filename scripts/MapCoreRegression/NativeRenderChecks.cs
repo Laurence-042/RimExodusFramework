@@ -32,6 +32,12 @@ internal static class NativeRenderChecks
         Check(MapOverlayGeometry.Clip(a, a + Vector3.right, a + Vector3.forward, footprint).Count == 0, "Outside overlay omitted");
         Check(!MapOverlayGeometry.IsClipCandidate(Vector3.zero, new Vector3(100, 5, 100), 100, 100, false), "3D geometry untouched");
         Check(!MapOverlayGeometry.IsClipCandidate(Vector3.zero, new Vector3(5, 0, 5), 100, 100, false), "Small geometry untouched");
+        Check(!MapOverlayGeometry.HasLargeSpan(Vector3.zero, new Vector3(16.99f, 0, 16.99f), 100, 100),
+            "Sections below 17 by 17 remain below the automatic threshold");
+        Check(MapOverlayGeometry.HasLargeSpan(Vector3.zero, new Vector3(17, 0, 17), 100, 100),
+            "Sections exactly 17 by 17 enter automatic clipping");
+        Check(MapOverlayGeometry.HasLargeSpan(Vector3.zero, new Vector3(60, 0, 5), 100, 100),
+            "Large thin overlays retain the half-map automatic rule");
 
         var map = (Verse.Map)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Verse.Map));
         map.info = new Verse.MapInfo { Size = new Verse.IntVec3(20, 1, 20) };
