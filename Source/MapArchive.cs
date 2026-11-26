@@ -24,7 +24,8 @@ namespace RimExodus.Maps
 
         // FinalizeLoading runs native callbacks synchronously; do not overlap another
         // Scribe lease or a suspended map generation/long-event initialization.
-        private static bool CanStartOperation => UnityData.IsInMainThread && ScribeOperation.IsAvailable
+        // Public so a consumer can tell "busy now" from a restore that actually failed.
+        public static bool CanStartOperation => UnityData.IsInMainThread && ScribeOperation.IsAvailable
             && MapGenerator.mapBeingGenerated == null && MapRuntime.Current?.Generation.IsBusy != true
             && !LongEventHandler.AnyEventNowOrWaiting;
 
@@ -149,8 +150,13 @@ namespace RimExodus.Maps
             return true;
         }
 
+        /// <summary>
+        /// <paramref name="tolerateUnspawned"/> lets the consumer accept specific saved Things that
+        /// vanilla's own load did not spawn; it receives the Thing as loaded. Without it every
+        /// absent saved Thing rejects the restore. Accepted Things are destroyed before returning.
+        /// </summary>
         public static bool TryRestore(string data, int expectedMapId,
-            MapParent expectedParent, out Map map)
+            MapParent expectedParent, out Map map, Func<Thing, bool> tolerateUnspawned = null)
         {
             map = null;
             if (data.NullOrEmpty() || !CanStartOperation) return false;
@@ -178,6 +184,11 @@ namespace RimExodus.Maps
                 ValidateRestoredPawnNeeds(document, Scribe.loader.crossRefs.crossReferencingExposables.OfType<Pawn>());
                 var loadedIds = new HashSet<string>(Scribe.loader.crossRefs.crossReferencingExposables
                     .OfType<ILoadReferenceable>().Where(CanRegisterExternalReference).Select(t => t.GetUniqueLoadID()));
+                // FinalizeLoading clears the Scribe registry. Keep the saved Things so an absent
+                // ID can be classified against its own object after spawning.
+                var loadedThings = new Dictionary<string, Thing>();
+                foreach (Thing thing in Scribe.loader.crossRefs.crossReferencingExposables.OfType<Thing>())
+                    if (thing.def != null) loadedThings[thing.ThingID] = thing;
                 RegisterExternalReferences(loaded, loadedIds);
                 // Game.LoadGame publishes loaded maps before resolving references, without
                 // AddMap (the new-map hook). Calling both AddMap and FinalizeLoading runs
@@ -188,9 +199,20 @@ namespace RimExodus.Maps
                     throw new InvalidDataException("Restored map identity or pocket parent differs from archive.");
                 loaded.FinalizeLoading();
                 loaded.Parent.FinalizeLoading();
-                var restoredIds = new HashSet<string>(loaded.listerThings.AllThings.Select(t => t.ThingID));
-                if (SavedIds(document).Any(id => !restoredIds.Contains(id)))
-                    throw new InvalidDataException("Map loading failed to spawn one or more persistent Things.");
+                var tolerated = new List<Thing>();
+                var toleratedByDef = new Dictionary<string, int>();
+                List<string> unspawned = UnspawnedThings(SavedIds(document), loaded.listerThings.AllThings,
+                    loadedThings, tolerateUnspawned, tolerated, toleratedByDef);
+                if (unspawned.Count > 0)
+                    throw new InvalidDataException("Map loading failed to spawn one or more persistent Things: "
+                        + string.Join(", ", unspawned.Take(10))
+                        + (unspawned.Count > 10 ? $" (+{unspawned.Count - 10} more)" : ""));
+                foreach (Thing thing in tolerated)
+                    if (!thing.Destroyed) thing.Destroy();
+                if (tolerated.Count > 0)
+                    Log.Warning($"[RimExodus.Maps] Dropped {tolerated.Count} saved Thing(s) during map restore "
+                        + "that the consumer accepts as missing: "
+                        + string.Join(", ", toleratedByDef.Select(pair => pair.Key + " x" + pair.Value)));
                 Find.ColonistBar.MarkColonistsDirty();
                 map = loaded;
                 return true;
@@ -279,6 +301,31 @@ namespace RimExodus.Maps
                         throw new InvalidDataException($"Archived Pawn {id} lost saved need {defName} during loading.");
                 }
             }
+        }
+
+        // Vanilla's own load silently discards some saved Things (a non-standable building wipes
+        // the filth under it), and a partial save may name an object the game no longer holds.
+        // Only the consumer knows which absences it accepts; every other absent ID stays fatal.
+        internal static List<string> UnspawnedThings(IEnumerable<string> savedIds, IEnumerable<Thing> restored,
+            IReadOnlyDictionary<string, Thing> loadedThings, Func<Thing, bool> tolerateUnspawned,
+            List<Thing> tolerated, Dictionary<string, int> toleratedByDef)
+        {
+            var restoredIds = new HashSet<string>(restored.Select(t => t.ThingID));
+            var fatal = new List<string>();
+            foreach (string id in savedIds)
+            {
+                if (restoredIds.Contains(id)) continue;
+                if (tolerateUnspawned == null || !loadedThings.TryGetValue(id, out Thing thing)
+                    || !tolerateUnspawned(thing))
+                {
+                    fatal.Add(id);
+                    continue;
+                }
+                tolerated.Add(thing);
+                toleratedByDef[thing.def.defName] = toleratedByDef.TryGetValue(thing.def.defName, out int count)
+                    ? count + 1 : 1;
+            }
+            return fatal;
         }
 
         internal static void RegisterExternalReferences(Map restoringMap, ISet<string> reservedIds = null)

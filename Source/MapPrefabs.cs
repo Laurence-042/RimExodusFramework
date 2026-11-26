@@ -22,6 +22,8 @@ namespace RimExodus.Maps
         public Action<Thing, MapPrefabThingEntry, IntVec3, Rot4> BeforeSpawn;
         public Func<Thing, Map, IntVec3, Rot4, Thing> PlaceThing;
         public Action<Map, List<Thing>, IntVec3, Rot4> Completed;
+        /// <summary>Saved Things this placement accepts as absent after a whole-map restore.</summary>
+        public Func<Thing, bool> TolerateUnspawned;
     }
     public sealed class PrefabPlacementResult
     {
@@ -114,7 +116,8 @@ namespace RimExodus.Maps
             {
                 if (options.Clone || map != null || options.Parent == null)
                     throw new ArgumentException("Native map state requires identity-preserving reconstruction and an explicit parent.");
-                if (!MapArchive.TryRestore(doc.mapState, doc.sourceMapId, options.Parent, out result.Map))
+                if (!MapArchive.TryRestore(doc.mapState, doc.sourceMapId, options.Parent, out result.Map,
+                    options.TolerateUnspawned))
                     result.Errors.Add("Could not restore native map state; retain the prefab document for retry.");
                 return result;
             }
@@ -250,13 +253,14 @@ namespace RimExodus.Maps
             try { data = Capture(map, new WholeMapSelection(), "map-" + map.uniqueID, includeMapState: true).mapState; return true; }
             catch (Exception error) { Log.Error($"[RimExodus.Maps] Map capture failed: {error}"); return false; }
         }
-        public static bool RestoreWholeMap(string data, int mapId, MapParent parent, out Map map)
+        public static bool RestoreWholeMap(string data, int mapId, MapParent parent, out Map map,
+            Func<Thing, bool> tolerateUnspawned = null)
         {
             map = null;
             if (string.IsNullOrEmpty(data) || parent == null) return false;
             var doc = new MapPrefabDocument { mapState = data, sourceMapId = mapId };
             PrefabPlacementResult result = Rebuild(doc, null, IntVec3.Zero, Rot4.North,
-                new PrefabPlacement { Clone = false, Parent = parent });
+                new PrefabPlacement { Clone = false, Parent = parent, TolerateUnspawned = tolerateUnspawned });
             map = result.Map;
             return result.Success;
         }

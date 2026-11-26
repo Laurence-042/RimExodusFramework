@@ -172,6 +172,28 @@ static class ArchiveReferenceChecks
                 Check(ReferenceEquals(restored.remoteItem, remoteItem), "Scribe resolves a world-holder item to its current instance");
                 Check(messages.Count == 0, "Scribe roundtrip has no missing references: " + string.Join("\n", messages));
             }
+            // Only the consumer knows which absent saved Things it accepts; the default stays fatal.
+            var building = new Thing { def = new ThingDef { defName = "Wall", category = ThingCategory.Building }, thingIDNumber = 41 };
+            var filth = new Thing { def = new ThingDef { defName = "Filth_Trash", category = ThingCategory.Filth }, thingIDNumber = 42 };
+            var item = new Thing { def = new ThingDef { defName = "Steel", category = ThingCategory.Item }, thingIDNumber = 43 };
+            var loadedThings = new Dictionary<string, Thing> { [building.ThingID] = building, [filth.ThingID] = filth, [item.ThingID] = item };
+            string[] savedIds = { building.ThingID, filth.ThingID, item.ThingID, "Missing44" };
+            var accepted = new List<Thing>(); var acceptedByDef = new Dictionary<string, int>();
+            List<string> fatal = MapArchive.UnspawnedThings(savedIds, new[] { building }, loadedThings, null, accepted, acceptedByDef);
+            Check(fatal.SequenceEqual(new[] { filth.ThingID, item.ThingID, "Missing44" }) && accepted.Count == 0 && acceptedByDef.Count == 0,
+                "without a consumer policy every absent saved Thing is fatal");
+            fatal = MapArchive.UnspawnedThings(savedIds, new[] { building, item }, loadedThings,
+                thing => thing.def.category == ThingCategory.Filth, accepted, acceptedByDef);
+            Check(fatal.SequenceEqual(new[] { "Missing44" }) && accepted.SequenceEqual(new[] { filth })
+                && acceptedByDef.Count == 1 && acceptedByDef["Filth_Trash"] == 1,
+                "consumer policy accepts a named loaded Thing and aggregates it by def");
+            accepted.Clear(); acceptedByDef.Clear();
+            fatal = MapArchive.UnspawnedThings(savedIds, new[] { building, item }, loadedThings, thing => true, accepted, acceptedByDef);
+            Check(fatal.SequenceEqual(new[] { "Missing44" }) && accepted.SequenceEqual(new[] { filth }),
+                "an ID without a loaded object stays fatal even under an accept-all policy");
+            accepted.Clear(); acceptedByDef.Clear();
+            fatal = MapArchive.UnspawnedThings(savedIds, new[] { building, filth, item }, loadedThings, thing => false, accepted, acceptedByDef);
+            Check(fatal.SequenceEqual(new[] { "Missing44" }) && accepted.Count == 0, "spawned Things are never classified");
             Console.WriteLine($"{count} archive reference checks passed (real 1.7 Scribe checker/directory; no map lifecycle).");
         }
         finally
