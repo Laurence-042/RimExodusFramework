@@ -1,3 +1,7 @@
+1.0.7
+- 修复：原版回调绘制的可见邻图现在会生成并正确变换爆炸闪光、烟雾等 Fleck/Mote；1.7 的动态实例批次直接变换实例矩阵，不增加地图轮询或额外 tick。
+  Fixed: visible neighboring maps drawn through native callbacks now generate and correctly transform explosion flashes, smoke, and other Fleck/Mote effects. RimWorld 1.7 dynamic instance batches transform their instance matrices directly without map polling or extra ticks.
+
 1.0.6
 - 17×17 格及以上的平面分区现在默认参与边界裁切，无需逐个模组适配。
   Planar sections of 17×17 cells or larger now use boundary clipping by default without per-mod adapters.

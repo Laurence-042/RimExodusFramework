@@ -4,6 +4,8 @@ using System.Reflection;
 using HarmonyLib;
 using UnityEngine;
 #if RIMWORLD_1_7
+using System.Buffers;
+using System.Runtime.InteropServices;
 using System.Threading;
 using Waylith.Rendering;
 #endif
@@ -18,6 +20,7 @@ namespace RimExodus.Maps
         private static readonly ReaderWriterLockSlim Sync = (ReaderWriterLockSlim)AccessTools.Field(Globals, "Sync").GetValue(null);
         private static readonly FieldInfo Version = AccessTools.Field(Globals, "version");
         private static readonly FieldInfo Registration = AccessTools.Field(Globals, "registrationVersion");
+        private static readonly int InstanceTransforms = ShaderPropertyId.GetOrCreate("_InstanceTransforms");
         private readonly Dictionary<int, float> floats;
         private readonly Dictionary<int, System.Numerics.Vector4> vectors;
         private readonly Dictionary<int, System.Numerics.Matrix4x4> matrices;
@@ -62,6 +65,55 @@ namespace RimExodus.Maps
 
         // Copy material values and only the globals actually consumed by this shader. Original MPB values win.
         // Capturing all global names as overrides would wrongly replace authored shader defaults and materials.
+        private static InstancedDrawInfo TransformInstances(InstancedDrawInfo source, Matrix4x4 transform)
+        {
+            if (source == null) return null;
+            InstanceStorageBinding[] bindings = source.StorageBindings;
+            InstanceStorageBinding[] transformed = null;
+            var display = Matrix4x4.ToNumerics(transform);
+            for (int i = 0; i < bindings.Length; i++)
+            {
+                InstanceStorageBinding binding = bindings[i];
+                InstanceDataBuffer buffer = binding.Dynamic;
+                if (binding.PropertyId != InstanceTransforms || buffer == null || buffer.Stride != 64) continue;
+                ReadOnlySpan<byte> bytes = buffer.GetBytes(binding.Generation);
+                if (bytes.Length == 0 || bytes.Length % 64 != 0) continue;
+                ReadOnlySpan<System.Numerics.Matrix4x4> matrices =
+                    MemoryMarshal.Cast<byte, System.Numerics.Matrix4x4>(bytes);
+                var scratch = ArrayPool<System.Numerics.Matrix4x4>.Shared.Rent(matrices.Length);
+                try
+                {
+                    for (int j = 0; j < matrices.Length; j++) scratch[j] = display * matrices[j];
+                    int generation = buffer.Write(MemoryMarshal.AsBytes(
+                        scratch.AsSpan(0, matrices.Length)), 64, matrices.Length);
+                    transformed = (InstanceStorageBinding[])bindings.Clone();
+                    transformed[i] = new InstanceStorageBinding(binding.PropertyId, buffer, generation);
+                }
+                finally { ArrayPool<System.Numerics.Matrix4x4>.Shared.Return(scratch); }
+                break;
+            }
+            if (transformed == null) return source;
+
+            System.Numerics.Vector3? centre = null;
+            if (source.SortCentre.HasValue)
+            {
+                var local = source.SortCentre.Value;
+                Vector3 point = transform.MultiplyPoint3x4(new Vector3(local.X, local.Y, local.Z));
+                centre = new System.Numerics.Vector3(point.x, point.y, point.z);
+            }
+            if (source.Mode == InstanceDrawMode.Direct)
+                return source.Ranges != null
+                    ? InstancedDrawInfo.DirectRanges(source.Ranges, transformed)
+                    : InstancedDrawInfo.Direct(source.InstanceCount, transformed, centre);
+            if (source.IndirectArgsDynamic != null)
+                return InstancedDrawInfo.Indirect(source.IndirectArgsDynamic, source.IndirectArgsGeneration,
+                    source.IndirectArgsOffset, transformed, centre);
+            if (source.IndirectArgsPersistent != null)
+                return InstancedDrawInfo.Indirect(source.IndirectArgsPersistent,
+                    source.IndirectArgsOffset, transformed);
+            return source;
+        }
+
         internal static MeshDrawCommand Freeze(in MeshDrawCommand command, Matrix4x4 transform)
         {
             if (command.Material == null) return command;
@@ -103,7 +155,8 @@ namespace RimExodus.Maps
             foreach (var property in values.Values) rangeValues[index++] = property;
             return new MeshDrawCommand(command.Mesh, command.Material, range,
                 Matrix4x4.ToNumerics(transform) * command.Matrix, command.SubmeshIndex, command.PassId,
-                command.Instancing, command.RenderQueueOverride > 0 ? command.RenderQueueOverride : command.Material.RenderQueue,
+                TransformInstances(command.Instancing, transform),
+                command.RenderQueueOverride > 0 ? command.RenderQueueOverride : command.Material.RenderQueue,
                 command.Layer, command.Storage);
         }
         [HarmonyPatch]

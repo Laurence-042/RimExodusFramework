@@ -153,6 +153,60 @@ internal static class NativeRenderChecks
         Check(frozen.RenderQueueOverride == 4300 && frozen.PassId == 3 && frozen.Layer == 7 && frozen.SubmeshIndex == 2,
             "Native render queue, pass, layer and submesh preserved");
         Check(frozen.Matrix == Matrix4x4.ToNumerics(transform * local), "Native command rotates and translates in display space");
+
+        int instanceTransforms = ShaderPropertyId.GetOrCreate("_InstanceTransforms");
+        var instanceBuffer = new InstanceDataBuffer();
+        var localInstances = new[] {
+            Matrix4x4.ToNumerics(local),
+            Matrix4x4.ToNumerics(Matrix4x4.TRS(new Vector3(-3, 5, 9), Quaternion.Euler(0, 35, 0), Vector3.one))
+        };
+        int sourceGeneration = instanceBuffer.Write(MemoryMarshal.AsBytes(localInstances.AsSpan()), 64, localInstances.Length);
+        var auxiliaryBuffer = new InstanceDataBuffer();
+        int auxiliaryGeneration = auxiliaryBuffer.Write(MemoryMarshal.AsBytes(new float[] { 17 }.AsSpan()), 4, 1);
+        int auxiliaryId = ShaderPropertyId.GetOrCreate("_RefTestInstanceAuxiliary");
+        var bindings = new[] {
+            new InstanceStorageBinding(instanceTransforms, instanceBuffer, sourceGeneration),
+            new InstanceStorageBinding(auxiliaryId, auxiliaryBuffer, auxiliaryGeneration)
+        };
+        var sourceCentre = new System.Numerics.Vector3(3, 0, 4);
+        var instances = InstancedDrawInfo.Direct(localInstances.Length, bindings, sourceCentre);
+        var instancedCommand = new MeshDrawCommand(null, material, sourceRange, System.Numerics.Matrix4x4.Identity,
+            4, 5, instances, 0, 9);
+        MeshDrawCommand frozenInstances = MapShaderState.Freeze(instancedCommand, transform);
+        var frozenBindings = frozenInstances.Instancing!.StorageBindings;
+        Check(frozenInstances.Instancing != instances && frozenInstances.Instancing.InstanceCount == localInstances.Length,
+            "Dynamic instancing is rebuilt with its original count");
+        Check(frozenBindings.Length == 2 && frozenBindings[1].PropertyId == auxiliaryId
+            && ReferenceEquals(frozenBindings[1].Dynamic, auxiliaryBuffer)
+            && frozenBindings[1].Generation == auxiliaryGeneration,
+            "Non-transform instance storage is preserved");
+        Check(ReferenceEquals(frozenBindings[0].Dynamic, instanceBuffer)
+            && frozenBindings[0].Generation != sourceGeneration,
+            "Display matrices use a new buffer generation without replacing the pooled buffer");
+        var displayedInstances = MemoryMarshal.Cast<byte, System.Numerics.Matrix4x4>(
+            instanceBuffer.GetBytes(frozenBindings[0].Generation));
+        Check(displayedInstances.Length == localInstances.Length
+            && displayedInstances[0] == Matrix4x4.ToNumerics(transform) * localInstances[0]
+            && displayedInstances[1] == Matrix4x4.ToNumerics(transform) * localInstances[1],
+            "Every dynamic instance matrix is transformed into display space");
+        var originalInstances = MemoryMarshal.Cast<byte, System.Numerics.Matrix4x4>(
+            instanceBuffer.GetBytes(sourceGeneration));
+        Check(originalInstances[0] == localInstances[0] && originalInstances[1] == localInstances[1],
+            "Source instance generation remains unchanged");
+        Vector3 displayedCentre = transform.MultiplyPoint3x4(
+            new Vector3(sourceCentre.X, sourceCentre.Y, sourceCentre.Z));
+        Check(frozenInstances.Instancing.SortCentre == new System.Numerics.Vector3(
+            displayedCentre.x, displayedCentre.y, displayedCentre.z),
+            "Instance sort centre follows the display transform");
+        Check(frozenInstances.PassId == 5 && frozenInstances.Layer == 9 && frozenInstances.SubmeshIndex == 4,
+            "Instanced draw route is preserved");
+
+        var ranges = new[] { new InstanceRange(0, 1), new InstanceRange(1, 1) };
+        var ranged = InstancedDrawInfo.DirectRanges(ranges, bindings);
+        var frozenRanges = MapShaderState.Freeze(new MeshDrawCommand(null, material, sourceRange,
+            System.Numerics.Matrix4x4.Identity, 0, 0, ranged), transform).Instancing!;
+        Check(ReferenceEquals(frozenRanges.Ranges, ranges) && frozenRanges.StorageBindings.Length == bindings.Length,
+            "Direct instance ranges and bindings survive display transformation");
         material.SetFloat(materialId, 100);
         Check(values[materialId].FloatValue == 23, "Later shared material writes do not change submitted neighbor values");
         MeshDrawSubmission.ClearFrameSubmissions();

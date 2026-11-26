@@ -142,6 +142,21 @@ namespace RimExodus.Maps
             private static void Prefix() => MapRuntime.Current?.Rendering.Clear();
         }
 
+        [HarmonyPatch(typeof(GenView), nameof(GenView.ShouldSpawnMotesAt),
+            new[] { typeof(IntVec3), typeof(Map), typeof(bool) })]
+        private static class NeighborEffectVisibilityPatch
+        {
+            private const int ViewMargin = 5;
+
+            private static void Postfix(IntVec3 loc, Map map, ref bool __result)
+            {
+                if (__result || map == null || !loc.InBounds(map)) return;
+                MapRenderPlan view = MapRuntime.Current?.Rendering.GetView(map);
+                if (view == null) return;
+                __result = view.LocalView.ExpandedBy(ViewMargin).Contains(loc);
+            }
+        }
+
         // The original MapUpdate runs ONCE, including third-party prefixes/postfixes and component updates.
         // No CameraDriver.Update replay, CurrentMap setter, extra tick, or separate component-update loop.
         [HarmonyPatch(typeof(Map), nameof(Map.MapUpdate))]

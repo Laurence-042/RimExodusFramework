@@ -1,4 +1,4 @@
-# RimExodus Framework (REF) 1.0.5
+# RimExodus Framework (REF) 1.0.7
 
 RimExodus 系列通用的地图渲染框架以及地图内结构操作工具包。REF 是独立的 RimWorld 前置 Mod，提供公共程序集 `RimExodus.Maps.dll`，不引用 Delta-V 或 RimExodus，也不添加飞船、武器或其他玩法内容。使用 MIT 协议，见 [LICENSE](LICENSE)。
 
@@ -12,11 +12,11 @@ Vehicle Map Framework 的地图面向载具设计，并以叠加在 worldtile �
 
 ## 功能与边界
 
-| 能力 | 1.0.5 状态 |
+| 能力 | 1.0.7 状态 |
 | --- | --- |
 | 多地图绘制 | 原版绘制捕获、局部到显示坐标变换、内容过滤与自定义输出；1.6 使用 CommandBuffer，1.7 使用 Waylith 命令和深度分组 |
 | 静态区块绘制 | 按表面层和材质合批静态平面，按脏区重建和释放，已接入 Delta-V 船壳 |
-| 原版多地图绘制入口 | `MapRuntime.Rendering.SetProvider` 接入原有逐图 Update/Draw 回调，保留队列并隔离常规 shader 参数。特殊相机和 GPU 管线仍有边界 |
+| 原版多地图绘制入口 | `MapRuntime.Rendering.SetProvider` 接入原有逐图 Update/Draw 回调，保留队列并隔离常规 shader 参数；可见邻图的原版 Fleck/Mote（含爆炸闪光与烟雾）按本地图变换绘制。特殊相机和 GPU 管线仍有边界 |
 | 分区覆盖层裁切 | 17×17 格及以上的平面分区默认参与裁切，并保留覆盖半图的长条规则；更小的分区可用 `OverlayClipSelector` 显式选择。 [接口契约](doc/地图模块.md#原版回调绘制契约) |
 | 无 worldtile 地图 | 口袋图创建、注册和公共 sourceMap 宿主服务 |
 | 区域模板与 prefab | 任意区域选择器，Home Area 是其中一种；逐实例 Scribe、地形、基架、屋顶、原版禁止建屋顶区域、室内温度／真空度和重建回调 |
@@ -27,7 +27,7 @@ Vehicle Map Framework 的地图面向载具设计，并以叠加在 worldtile �
 | SS 地图背景兼容 | 对任意来源的地图尊重 `MapGeneratorDef.disableMapClippers`：明确禁用时阻止 SS 强制开启遮片，其余地图不改结果；不判断消费方或地图类别 |
 | IsoRim 1.7 可见性兼容 | 原版回调窗口保留源图局部视区，私有包围盒/模型剔除使用显示坐标；适用于任意消费方的绘制计划；用户已在 RE 中确认修复有效。矩形土层侧面与首次显示重建尚未适配 |
 
-区域模板、封存与 prefab 共用内容模型；整图归档是范围覆盖全图并包含地图级状态的特例。区域清空/替换事务、资源池和 Gravship 搬运尚未全部迁入。不要将 1.0.5 解释为所有规划能力均已完成。API、生命周期契约和剩余工作见 [地图模块](doc/地图模块.md)，最初调研见 [迁移备忘录](doc/迁移备忘录.md)。
+区域模板、封存与 prefab 共用内容模型；整图归档是范围覆盖全图并包含地图级状态的特例。区域清空/替换事务、资源池和 Gravship 搬运尚未全部迁入。不要将 1.0.7 解释为所有规划能力均已完成。API、生命周期契约和剩余工作见 [地图模块](doc/地图模块.md)，最初调研见 [迁移备忘录](doc/迁移备忘录.md)。
 
 Delta-V 已切换为唯一 REF 后端，保留船壳选择、宇宙运动、飞船身份、标记展开与战斗策略。RimExodus 已接入可选 REF 后端，默认保留 legacy，开关重启生效；REF 模式的生成、渲染、降频、区域恢复及原版/CE 战斗接线仍需游戏内验收。
 
